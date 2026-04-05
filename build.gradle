@@ -1,0 +1,63 @@
+plugins {
+    id 'java'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+}
+
+repositories {
+    mavenLocal()
+    maven {
+        url = 'https://repo.runelite.net'
+        content { includeGroupByRegex("net\\.runelite.*") }
+    }
+    mavenCentral()
+}
+
+// Use -Prunelite.version=… to pin a version; Plugin Hub recommends latest.release (see plugin-hub README).
+def runeLiteVersion = providers.gradleProperty('runelite.version').orElse('latest.release').get()
+def devMainClass = 'com.terpinheimer.TerpinheimerPluginDev'
+
+dependencies {
+    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+    testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+}
+
+group = 'com.terpinheimer'
+version = '2.0.0'
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(11)
+}
+
+tasks.register('run', JavaExec) {
+    group = 'application'
+    description = 'Run RuneLite with Terpinheimer (builtin dev)'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(11) }
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = devMainClass
+    jvmArgs '-ea'
+    args '--developer-mode', '--debug'
+}
+
+tasks.register('shadowJar', Jar) {
+    dependsOn configurations.runtimeClasspath
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from sourceSets.main.output
+    from { configurations.runtimeClasspath.collect { it.directory ? it : zipTree(it) } }
+    exclude 'META-INF/INDEX.LIST'
+    exclude 'META-INF/*.SF'
+    exclude 'META-INF/*.DSA'
+    exclude 'META-INF/*.RSA'
+    exclude '**/module-info.class'
+    group = org.gradle.api.plugins.BasePlugin.BUILD_GROUP
+    archiveClassifier.set('shadow')
+    archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
+}
+
+tasks.named('assemble') { dependsOn tasks.shadowJar }
