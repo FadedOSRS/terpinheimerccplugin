@@ -72,7 +72,7 @@ public class WebhookDispatcher
 
 	public void enqueue(WebhookPayload payload)
 	{
-		String url = config.webhookUrl();
+		String url = effectiveUrl(payload);
 		if (!WebhookUrlValidator.isValid(url))
 		{
 			long now = System.currentTimeMillis();
@@ -81,11 +81,6 @@ public class WebhookDispatcher
 				lastInvalidUrlWarnMs = now;
 				log.warn("Terpinheimer Discord: webhook URL is empty or invalid; notifications are disabled until it is set.");
 			}
-			return;
-		}
-		if (config.discordPreviewToLog())
-		{
-			log.info("Terpinheimer Discord preview: {}", payload.getJsonBody());
 			return;
 		}
 		if (!queue.offer(payload))
@@ -124,7 +119,7 @@ public class WebhookDispatcher
 
 	private void sendWithRetries(WebhookPayload job)
 	{
-		String url = config.webhookUrl().trim();
+		String url = effectiveUrl(job).trim();
 		for (int attempt = 0; attempt < 5; attempt++)
 		{
 			try (Response response = executePost(url, job))
@@ -174,6 +169,16 @@ public class WebhookDispatcher
 				return;
 			}
 		}
+	}
+
+	private String effectiveUrl(WebhookPayload payload)
+	{
+		String override = payload.getWebhookUrlOverride();
+		if (override != null && !override.trim().isEmpty())
+		{
+			return override.trim();
+		}
+		return config.webhookUrl();
 	}
 
 	private static void sleepBackoff(int attempt)

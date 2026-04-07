@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
@@ -112,18 +111,8 @@ public class LootEventHandler
 			return;
 		}
 
-		Set<String> allow = DiscordListParser.parseLines(config.lootItemAllowlist());
-		Set<String> denyItems = DiscordListParser.parseLines(config.lootItemDenylist());
-		Set<String> denySrc = DiscordListParser.parseLines(config.lootSourceDenylist());
-		if (DiscordListParser.sourceDenied(sourceLabel, denySrc))
-		{
-			return;
-		}
-
 		long total = 0L;
-		long maxStackValue = 0L;
 		List<String> markdownLines = new ArrayList<>();
-		List<String> itemNamesStd = new ArrayList<>();
 		Integer firstItemId = null;
 		for (ItemStack stack : stacks)
 		{
@@ -132,9 +121,7 @@ public class LootEventHandler
 			int unit = itemManager.getItemPrice(id);
 			long stackVal = (long) unit * qty;
 			total += stackVal;
-			maxStackValue = Math.max(maxStackValue, stackVal);
 			String name = itemManager.getItemComposition(id).getName();
-			itemNamesStd.add(Text.standardize(name));
 			String label = String.format("%,d x %s", qty, name);
 			String line = WikiLinks.markdownLink(label, WikiLinks.itemPage(name))
 				+ " (" + WikiLinks.formatGpCompact(stackVal) + ")";
@@ -144,37 +131,12 @@ public class LootEventHandler
 				firstItemId = id;
 			}
 		}
-		if (DiscordListParser.lootViolatesItemFilters(itemNamesStd, allow, denyItems))
-		{
-			return;
-		}
 		markdownLines.sort(Comparator.naturalOrder());
 
 		int threshold = config.lootValueThreshold();
-		int oneInX = config.lootRarityOneInX();
-		if (oneInX <= 0)
+		if (total < threshold)
 		{
-			if (total < threshold)
-			{
-				return;
-			}
-		}
-		else
-		{
-			long rarityFloor = Math.max(1L, (long) threshold * oneInX / 50L);
-			boolean rareOk = maxStackValue >= rarityFloor;
-			boolean valueOk = total >= threshold;
-			if (config.lootRequireRarityAndValue())
-			{
-				if (!(valueOk && rareOk))
-				{
-					return;
-				}
-			}
-			else if (!(valueOk || rareOk))
-			{
-				return;
-			}
+			return;
 		}
 
 		String title = bossStyle ? "Boss Drop" : "Loot Drop";

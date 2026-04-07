@@ -60,20 +60,33 @@ public class DeathEventHandler
 		}
 		String user = client.getLocalPlayer() != null
 			? Text.removeTags(client.getLocalPlayer().getName()) : "Player";
-		final JsonObject embed = messageBuilder.deathDinkStyleEmbed(user);
-		if (config.includeScreenshot())
+		String deathReason = resolveDeathReason(actor);
+		final JsonObject embed = messageBuilder.deathDinkStyleEmbed(user, deathReason);
+		scheduledExecutor.schedule(() -> clientThread.invokeLater(() ->
 		{
-			scheduledExecutor.schedule(() -> clientThread.invokeLater(() ->
-			{
-				byte[] png = screenshot.capturePngOrNull();
-				String json = messageBuilder.toWebhookJson(embed);
-				dispatcher.enqueue(new WebhookPayload(json, png));
-			}), DEATH_SCREENSHOT_DELAY_MS, TimeUnit.MILLISECONDS);
-		}
-		else
-		{
+			byte[] png = screenshot.capturePngOrNull();
 			String json = messageBuilder.toWebhookJson(embed);
-			dispatcher.enqueue(new WebhookPayload(json, null));
+			dispatcher.enqueue(new WebhookPayload(json, png));
+		}), DEATH_SCREENSHOT_DELAY_MS, TimeUnit.MILLISECONDS);
+	}
+
+	/** Fighting target at death when available; otherwise environmental / unknown. */
+	private static String resolveDeathReason(Actor deceased)
+	{
+		if (deceased == null)
+		{
+			return "";
 		}
+		Actor source = deceased.getInteracting();
+		if (source == null)
+		{
+			return "";
+		}
+		String name = source.getName();
+		if (name == null || name.isBlank())
+		{
+			return "";
+		}
+		return Text.removeTags(name).trim();
 	}
 }

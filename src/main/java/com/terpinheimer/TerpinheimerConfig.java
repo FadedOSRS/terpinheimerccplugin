@@ -24,7 +24,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "General",
-		description = "(Do not edit or change — this may break your plugin.) Clan name, WOM group, refresh, announcements.",
+		description = "WOM group, refresh interval, announcements, RuneLite sidebar icon.",
 		position = 0,
 		closedByDefault = true
 	)
@@ -32,7 +32,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Live clan map",
-		description = "When enabled, POSTs your position on a schedule. Set API base URL and shared key under Links.",
+		description = "When enabled, POSTs your position on a schedule. Set the API base URL under Links and the shared key here.",
 		position = 1,
 		closedByDefault = true
 	)
@@ -104,7 +104,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Links",
-		description = "Home shortcuts, calendar API, and live map POST credentials (base URL + shared key for {base}/post).",
+		description = "Home shortcuts, clan calendar page & summary API, and live map API base URL ({base}/post). Shared key is under Live clan map.",
 		position = 10,
 		closedByDefault = true
 	)
@@ -112,20 +112,14 @@ public interface TerpinheimerConfig extends Config
 
 	// ---- General ----
 
-	@ConfigItem(keyName = "clanName", name = "Clan name", description = "Shown in the sidebar panel title area", position = 0, section = SEC_GEN)
-	default String clanName()
-	{
-		return "Your clan";
-	}
-
 	@Range(min = 1, max = 60)
-	@ConfigItem(keyName = "refreshIntervalMinutes", name = "WOM refresh (minutes)", description = "How often to refresh Wise Old Man competition data", position = 1, section = SEC_GEN)
+	@ConfigItem(keyName = "refreshIntervalMinutes", name = "WOM refresh (minutes)", description = "How often to refresh Wise Old Man competition data", position = 0, section = SEC_GEN)
 	default int refreshIntervalMinutes()
 	{
 		return 7;
 	}
 
-	@ConfigItem(keyName = "announcementsEnabled", name = "Show announcements", description = "Show the announcements block on Home", position = 2, section = SEC_GEN)
+	@ConfigItem(keyName = "announcementsEnabled", name = "Show announcements", description = "Show the announcements block on Home", position = 1, section = SEC_GEN)
 	default boolean announcementsEnabled()
 	{
 		return true;
@@ -135,7 +129,7 @@ public interface TerpinheimerConfig extends Config
 		keyName = "announcementsText",
 		name = "Announcements text",
 		description = "Static text for the Home tab announcements block (use \\n for line breaks). Only Owner or Deputy Owner (Jagex clan rank, logged in) can save changes; other ranks revert to the last authorized text. Other plugin settings are not rank-locked.",
-		position = 3,
+		position = 2,
 		section = SEC_GEN
 	)
 	default String announcementsText()
@@ -144,34 +138,46 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@Range(min = 0, max = Integer.MAX_VALUE)
-	@ConfigItem(keyName = "womGroupId", name = "Wise Old Man group ID", description = "SOTW and BOTW fetch from this WOM group. Use 0 to use the built-in Terpinheimer group (23745).", position = 4, section = SEC_GEN)
+	@ConfigItem(keyName = "womGroupId", name = "Wise Old Man group ID", description = "SOTW and BOTW fetch from this WOM group. Use 0 to use the built-in Terpinheimer group (23745).", position = 3, section = SEC_GEN)
 	default int womGroupId()
 	{
 		return 23745;
 	}
 
-	@ConfigItem(keyName = "womUpdateProfileOnLogout", name = "Update WOM profile on logout", description = "When you log out or hop worlds, send a Wise Old Man hiscores update if you gained 10k+ XP or leveled a skill (same idea as the WOM hub plugin). Then refresh this plugin's competition data.", position = 5, section = SEC_GEN)
+	@ConfigItem(
+		keyName = "womUpdateProfileOnLogout",
+		name = "Update WOM profile on logout",
+		description = "When on, Terpinheimer asks Wise Old Man to refresh your stats from the hiscores on logout / world hop (built-in—no WOM hub plugin needed). Turn on \"Sync WOM/RuneProfile only after XP gain\" to limit calls.",
+		position = 4,
+		section = SEC_GEN
+	)
 	default boolean womUpdateProfileOnLogout()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "runeprofileUpdateOnLogout", name = "Update RuneProfile on logout", description = "When the same XP/level condition as the WOM logout update is met, also POST your skills and quests to api.runeprofile.com so your RuneProfile page updates. Requires a Jagex-linked account (account hash). Collection log on the site still benefits from the official RuneProfile plugin.", position = 6, section = SEC_GEN)
+	@ConfigItem(
+		keyName = "runeprofileUpdateOnLogout",
+		name = "Update RuneProfile on logout",
+		description = "When on, Terpinheimer POSTs skills and quests to api.runeprofile.com on logout / world hop (built-in—no RuneProfile plugin needed). Requires a Jagex-linked RuneLite account (account hash). Full collection log on the site may still use the official RuneProfile plugin.",
+		position = 5,
+		section = SEC_GEN
+	)
 	default boolean runeprofileUpdateOnLogout()
 	{
 		return true;
 	}
 
 	@ConfigItem(
-		keyName = "clanCalendarPageUrl",
-		name = "Clan calendar page URL",
-		description = "Opened when you click the Website row on Home. Hash routes (e.g. #/events) are OK.",
-		position = 7,
+		keyName = "womRuneprofileSyncOnlyAfterProgress",
+		name = "Sync WOM/RuneProfile only after XP gain",
+		description = "When off (default), Wise Old Man and RuneProfile sync every logout or world hop while the options above are on. When on, only sync after 10k+ total XP gained this session or any skill level-up (fewer API calls).",
+		position = 6,
 		section = SEC_GEN
 	)
-	default String clanCalendarPageUrl()
+	default boolean womRuneprofileSyncOnlyAfterProgress()
 	{
-		return "https://terpinheimercc.onrender.com/#/events";
+		return false;
 	}
 
 	@Range(min = 0, max = 100)
@@ -179,12 +185,24 @@ public interface TerpinheimerConfig extends Config
 		keyName = "sidebarButtonPriority",
 		name = "Sidebar icon position",
 		description = "Sort order for this plugin's icon on the right sidebar. Lower numbers move it up; higher numbers move it down (same rule as RuneLite's other plugins).",
-		position = 8,
+		position = 7,
 		section = SEC_GEN
 	)
 	default int sidebarButtonPriority()
 	{
 		return 5;
+	}
+
+	@ConfigItem(
+		keyName = "partyLootShare",
+		name = "Party loot (Group tab)",
+		description = "In a RuneLite party (Party plugin + passphrase), broadcast your NPC and PvP loot to party members who also use Terpinheimer. The Group sidebar tab appears only while you are in a party. Same party websocket as Party Panel https://runelite.net/plugin-hub/show/party-panel",
+		position = 8,
+		section = SEC_GEN
+	)
+	default boolean partyLootShare()
+	{
+		return true;
 	}
 
 	// ---- Discord — Webhook ----
@@ -214,30 +232,6 @@ public interface TerpinheimerConfig extends Config
 		return true;
 	}
 
-	@ConfigItem(
-		keyName = "includeScreenshot",
-		name = "Include screenshot",
-		description = "When enabled, attach a game screenshot for deaths (loot and levels use their own Send image toggles).",
-		position = 2,
-		section = SEC_DISCORD_WEBHOOK
-	)
-	default boolean includeScreenshot()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "discordPreviewToLog",
-		name = "Preview messages (debug)",
-		description = "If enabled, log the JSON payload instead of sending to Discord (for debugging).",
-		position = 3,
-		section = SEC_DISCORD_WEBHOOK
-	)
-	default boolean discordPreviewToLog()
-	{
-		return false;
-	}
-
 	// ---- Discord — Loot ----
 
 	@ConfigItem(
@@ -249,13 +243,13 @@ public interface TerpinheimerConfig extends Config
 	)
 	default boolean sendLoot()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(
 		keyName = "lootSendImage",
 		name = "Send image",
-		description = "Attach a screenshot to loot webhooks (not the global Include screenshot toggle).",
+		description = "Attach a screenshot to loot webhooks (death webhooks always include a screenshot when enabled).",
 		position = 1,
 		section = SEC_DISCORD_LOOT
 	)
@@ -273,14 +267,14 @@ public interface TerpinheimerConfig extends Config
 	)
 	default boolean lootShowLootIcons()
 	{
-		return false;
+		return true;
 	}
 
 	@Range(min = 0, max = 2_147_483_647)
 	@ConfigItem(
 		keyName = "lootValueThreshold",
 		name = "Min loot value",
-		description = "Minimum total GE value before a loot notification is sent (0 = always, if rarity rules pass).",
+		description = "Minimum total GE value before a loot notification is sent (0 = always).",
 		position = 3,
 		section = SEC_DISCORD_LOOT
 	)
@@ -326,71 +320,10 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "lootItemAllowlist",
-		name = "Item allowlist",
-		description = "If non-empty, at least one dropped item name must match a line (substring, one entry per line).",
-		position = 7,
-		section = SEC_DISCORD_LOOT
-	)
-	default String lootItemAllowlist()
-	{
-		return "";
-	}
-
-	@ConfigItem(
-		keyName = "lootItemDenylist",
-		name = "Item denylist",
-		description = "Never notify if any dropped item matches a line (substring).",
-		position = 8,
-		section = SEC_DISCORD_LOOT
-	)
-	default String lootItemDenylist()
-	{
-		return "";
-	}
-
-	@ConfigItem(
-		keyName = "lootSourceDenylist",
-		name = "Source denylist",
-		description = "Never notify if the loot source (NPC name) matches a line (substring).",
-		position = 9,
-		section = SEC_DISCORD_LOOT
-	)
-	default String lootSourceDenylist()
-	{
-		return "";
-	}
-
-	@Range(min = 0, max = 10_000)
-	@ConfigItem(
-		keyName = "lootRarityOneInX",
-		name = "Rarity override (1 in X)",
-		description = "0 = off. When > 0, uses an extra rarity check on the largest stack value vs total (approximate rare-drop filter).",
-		position = 10,
-		section = SEC_DISCORD_LOOT
-	)
-	default int lootRarityOneInX()
-	{
-		return 0;
-	}
-
-	@ConfigItem(
-		keyName = "lootRequireRarityAndValue",
-		name = "Require both rarity and value",
-		description = "When rarity override is on: if checked, both value threshold and rarity must pass; if off, either can pass.",
-		position = 11,
-		section = SEC_DISCORD_LOOT
-	)
-	default boolean lootRequireRarityAndValue()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "lootNotificationMessage",
 		name = "Notification message",
 		description = "Placeholders: %USERNAME%, %LOOT% (wiki markdown lines), %SOURCE% (wiki link), %VALUE% (compact gp). Use \\n for new lines.",
-		position = 12,
+		position = 7,
 		section = SEC_DISCORD_LOOT
 	)
 	default String lootNotificationMessage()
@@ -433,7 +366,7 @@ public interface TerpinheimerConfig extends Config
 	)
 	default boolean clueShowItemIcons()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(
@@ -552,13 +485,13 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "collectionLogMessage",
 		name = "Notification message",
-		description = "Placeholders: %USERNAME%, %ITEM% (wiki link), %GAME_MESSAGE%. Use \\n for new lines.",
+		description = "Placeholders: %USERNAME%, %ITEM% (wiki link), %GAME_MESSAGE%. Default wraps %ITEM% in ** for a bold wiki link. Use \\n for new lines.",
 		position = 3,
 		section = SEC_DISCORD_COLLECTION
 	)
 	default String collectionLogMessage()
 	{
-		return "%USERNAME% has added %ITEM% to their collection";
+		return "%USERNAME% has added **%ITEM%** to their collection";
 	}
 
 	// ---- Discord — Levels ----
@@ -608,7 +541,7 @@ public interface TerpinheimerConfig extends Config
 	)
 	default boolean levelNotifyCombatLevels()
 	{
-		return false;
+		return true;
 	}
 
 	@Range(min = 1, max = 120)
@@ -790,10 +723,22 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "clanCalendarPageUrl",
+		name = "Clan calendar page URL",
+		description = "Opened from Home → Events → Website row and Web Events → Open clan calendar. Hash routes (e.g. #/events) are OK.",
+		position = 7,
+		section = SEC_LINKS
+	)
+	default String clanCalendarPageUrl()
+	{
+		return "https://terpinheimercc.onrender.com/#/events";
+	}
+
+	@ConfigItem(
 		keyName = "clanCalendarSummaryApiUrl",
 		name = "Clan calendar summary API (GET)",
 		description = "HTTPS GET URL returning JSON: use ?format=array for a list of events (startsAt/endsAt), or a summary object (activeCount, phase, etc.). Drives Website status and Web Events list. API authorization is built into the plugin.",
-		position = 7,
+		position = 8,
 		section = SEC_LINKS
 	)
 	default String clanCalendarSummaryApiUrl()
@@ -805,26 +750,13 @@ public interface TerpinheimerConfig extends Config
 		keyName = "liveMapApiBaseUrl",
 		name = "Live map API base URL",
 		description = "HTTPS base only, no path — the live map plugin POSTs to {base}/post. Configure with Live clan map → Enable.",
-		position = 8,
+		position = 9,
 		section = SEC_LINKS,
 		secret = true
 	)
 	default String liveMapApiBaseUrl()
 	{
 		return "https://terpinheimercc.onrender.com";
-	}
-
-	@ConfigItem(
-		keyName = "liveMapApiKey",
-		name = "Live map API shared key",
-		description = "Sent as the Authorization header on live map POSTs (Goblin Scape pattern).",
-		position = 9,
-		section = SEC_LINKS,
-		secret = true
-	)
-	default String liveMapApiKey()
-	{
-		return "";
 	}
 
 	// ---- Clan event attendance ----
@@ -910,13 +842,13 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "liveMapEnabled",
 		name = "Enable live map API",
-		description = "When on, periodically POST your position to Links → Live map API base URL ({base}/post).",
+		description = "When on, periodically POST your position to Links → Live map API base URL ({base}/post) using the shared key below.",
 		position = 0,
 		section = SEC_LIVE_MAP
 	)
 	default boolean liveMapEnabled()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(
@@ -954,5 +886,18 @@ public interface TerpinheimerConfig extends Config
 	default int liveMapIntervalTicks()
 	{
 		return 5;
+	}
+
+	@ConfigItem(
+		keyName = "liveMapApiKey",
+		name = "Live map API shared key",
+		description = "Sent as the Authorization header on live map POSTs (Goblin Scape pattern). Base URL is under Links.",
+		position = 4,
+		section = SEC_LIVE_MAP,
+		secret = true
+	)
+	default String liveMapApiKey()
+	{
+		return "";
 	}
 }

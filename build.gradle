@@ -17,7 +17,8 @@ repositories {
     mavenCentral()
 }
 
-// Use -Prunelite.version=… to pin a version; Plugin Hub recommends latest.release (see plugin-hub README).
+// RuneLite client API version: default 'latest.release' keeps the plugin aligned with the current client after updates.
+// Pin only when needed: -Prunelite.version=1.x.y (reproducible local builds; Plugin Hub uses hub bumps separately).
 def runeLiteVersion = providers.gradleProperty('runelite.version').orElse('latest.release').get()
 def devMainClass = 'com.terpinheimer.TerpinheimerPluginDev'
 

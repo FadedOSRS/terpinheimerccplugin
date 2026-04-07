@@ -3,6 +3,9 @@ package com.terpinheimer.ui;
 import com.terpinheimer.TerpinheimerConfig;
 import com.terpinheimer.TerpinheimerPlugin;
 import com.terpinheimer.attendance.ClanAttendanceTracker;
+import com.terpinheimer.discord.WikiLinks;
+import com.terpinheimer.party.PartyLootRow;
+import com.terpinheimer.party.PartyLootTracker;
 import com.terpinheimer.site.ClanCalendarSummaryService.WebEventRow;
 import com.terpinheimer.wom.WomLeaderboardModels;
 import java.awt.BorderLayout;
@@ -18,13 +21,11 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
-import javax.swing.Box;
-import javax.swing.BoxLayout;
-import javax.swing.ScrollPaneConstants;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,17 +38,22 @@ import java.util.List;
 import java.util.Locale;
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
-import javax.swing.JOptionPane;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JViewport;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
@@ -62,10 +68,14 @@ public class TerpinheimerPanel extends PluginPanel
 	private static final String CARD_BOTW = "botw";
 	private static final String CARD_WEB_EVENTS = "webevents";
 	private static final String CARD_ATTENDANCE = "attendance";
+	private static final String CARD_GROUP = "group";
 	/** Bottom bar tabs only; attendance is opened from Home (no duplicate tab). */
 	private static final String[] TAB_CARD_NAMES = {
 		CARD_HOME, CARD_SOTW, CARD_BOTW, CARD_WEB_EVENTS
 	};
+	private static final int TAB_GROUP_INDEX = 4;
+	/** Group loot table: column index for per-row delete. */
+	private static final int GROUP_COL_REMOVE = 3;
 	private static final int NO_TAB_SELECTED = -1;
 	private static final String LOGO = "/terpinheimer-logo.png";
 	/** Home events table: row 2 is Website (opens clan calendar URL). */
@@ -73,11 +83,19 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private final TerpinheimerPlugin plugin;
 	private final TerpinheimerConfig config;
+	private final PartyLootTracker partyLootTracker;
 	private final CardLayout cards = new CardLayout();
 	private final JPanel cardHost = new JPanel(cards);
 
 	private int currentTab = 0;
 	private final JButton[] tabButtons = new JButton[4];
+	private final JButton groupTabButton;
+	private JPanel southTabBar;
+	private boolean groupTabBarVisible;
+	private DefaultTableModel groupLootModel;
+	private JTable groupLootTable;
+	private final List<Long> groupLootRowIds = new ArrayList<>();
+	private JLabel groupLootTotalsLabel;
 
 	private final JTextArea attendanceReportArea = new JTextArea();
 	private final JButton attendanceStartStopBtn = FluxUi.pillButton("Start event");
@@ -116,12 +134,13 @@ public class TerpinheimerPanel extends PluginPanel
 	private DefaultTableModel homeEventsModel;
 	private JTable homeEventsTable;
 
-	private javax.swing.Timer tickTimer;
+	private Timer tickTimer;
 
-	public TerpinheimerPanel(TerpinheimerPlugin plugin, TerpinheimerConfig config)
+	public TerpinheimerPanel(TerpinheimerPlugin plugin, TerpinheimerConfig config, PartyLootTracker partyLootTracker)
 	{
 		this.plugin = plugin;
 		this.config = config;
+		this.partyLootTracker = partyLootTracker;
 		setLayout(new BorderLayout());
 		setBackground(FluxUi.BG);
 
@@ -131,33 +150,35 @@ public class TerpinheimerPanel extends PluginPanel
 		cardHost.add(buildCompetitionTab(false), CARD_BOTW);
 		cardHost.add(buildWebEventsTab(), CARD_WEB_EVENTS);
 		cardHost.add(buildAttendanceTab(), CARD_ATTENDANCE);
+		cardHost.add(buildGroupTab(), CARD_GROUP);
 		add(cardHost, BorderLayout.CENTER);
 
-		JPanel south = new JPanel(new GridLayout(1, 4, 1, 0));
-		south.setBackground(FluxUi.BG);
-		south.setBorder(new EmptyBorder(4, 4, 6, 4));
+		southTabBar = new JPanel();
+		southTabBar.setBackground(FluxUi.BG);
+		southTabBar.setBorder(new EmptyBorder(4, 4, 6, 4));
 		tabButtons[0] = FluxUi.tabToggle("Home", true);
 		tabButtons[1] = FluxUi.tabToggle("SOTW", false);
 		tabButtons[2] = FluxUi.tabToggle("BOTW", false);
 		tabButtons[3] = FluxUi.tabToggle("Web Events", false);
 		tabButtons[3].setToolTipText("Clan calendar on your website");
+		groupTabButton = FluxUi.tabToggle("Group", false);
+		groupTabButton.setToolTipText("Party loot (RuneLite party). Join a party with the Party plugin.");
 		tabButtons[0].addActionListener(e -> selectTab(0));
 		tabButtons[1].addActionListener(e -> selectTab(1));
 		tabButtons[2].addActionListener(e -> selectTab(2));
 		tabButtons[3].addActionListener(e -> selectTab(3));
+		groupTabButton.addActionListener(e -> selectTab(TAB_GROUP_INDEX));
 		for (int i = 0; i < tabButtons.length; i++)
 		{
 			refreshTabStyle(tabButtons[i], i == 0);
 		}
-		south.add(tabButtons[0]);
-		south.add(tabButtons[1]);
-		south.add(tabButtons[2]);
-		south.add(tabButtons[3]);
-		add(south, BorderLayout.SOUTH);
+		refreshTabStyle(groupTabButton, false);
+		rebuildSouthTabBar();
+		add(southTabBar, BorderLayout.SOUTH);
 
 		plugin.getClanAttendanceTracker().setUiRefresh(this::syncAttendanceTab);
 
-		tickTimer = new javax.swing.Timer(1000, e -> tickCountdowns());
+		tickTimer = new Timer(1000, e -> tickCountdowns());
 		tickTimer.start();
 
 		applyFromPlugin();
@@ -188,6 +209,23 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private void selectTab(int idx)
 	{
+		if (idx == TAB_GROUP_INDEX)
+		{
+			if (!groupTabBarVisible)
+			{
+				return;
+			}
+			currentTab = TAB_GROUP_INDEX;
+			for (JButton tabButton : tabButtons)
+			{
+				refreshTabStyle(tabButton, false);
+			}
+			refreshTabStyle(groupTabButton, true);
+			cards.show(cardHost, CARD_GROUP);
+			revalidate();
+			repaint();
+			return;
+		}
 		if (idx < 0 || idx >= TAB_CARD_NAMES.length)
 		{
 			return;
@@ -197,9 +235,204 @@ public class TerpinheimerPanel extends PluginPanel
 		{
 			refreshTabStyle(tabButtons[i], i == idx);
 		}
+		if (groupTabBarVisible)
+		{
+			refreshTabStyle(groupTabButton, false);
+		}
 		cards.show(cardHost, TAB_CARD_NAMES[idx]);
 		revalidate();
 		repaint();
+	}
+
+	private void rebuildSouthTabBar()
+	{
+		boolean showGroup = partyLootTracker.isPartyLootTabVisible();
+		if (showGroup == groupTabBarVisible && southTabBar.getComponentCount() > 0)
+		{
+			return;
+		}
+		groupTabBarVisible = showGroup;
+		southTabBar.removeAll();
+		int cols = groupTabBarVisible ? 5 : 4;
+		southTabBar.setLayout(new GridLayout(1, cols, 1, 0));
+		for (JButton tabButton : tabButtons)
+		{
+			southTabBar.add(tabButton);
+		}
+		if (groupTabBarVisible)
+		{
+			southTabBar.add(groupTabButton);
+		}
+		southTabBar.revalidate();
+		southTabBar.repaint();
+	}
+
+	/** Called from {@link PartyLootTracker} when party membership or loot rows change. */
+	public void syncPartyGroupTabUi()
+	{
+		boolean wasGroup = groupTabBarVisible;
+		rebuildSouthTabBar();
+		refreshGroupLootTable();
+		if (wasGroup && !groupTabBarVisible && currentTab == TAB_GROUP_INDEX)
+		{
+			selectTab(0);
+		}
+		else if (groupTabBarVisible)
+		{
+			if (currentTab == TAB_GROUP_INDEX)
+			{
+				refreshTabStyle(groupTabButton, true);
+			}
+		}
+		revalidate();
+		repaint();
+	}
+
+	private void refreshGroupLootTable()
+	{
+		if (groupLootModel == null)
+		{
+			return;
+		}
+		groupLootModel.setRowCount(0);
+		groupLootRowIds.clear();
+		int rowIdx = 0;
+		for (PartyLootRow row : partyLootTracker.snapshotRows())
+		{
+			groupLootRowIds.add(row.getId());
+			String cost = row.getValueGp() > 0
+				? WikiLinks.formatGpCompact(row.getValueGp()) + " gp"
+				: "—";
+			groupLootModel.addRow(new Object[]{
+				row.getPlayer(),
+				row.getDropSummary(),
+				cost,
+				"Remove"
+			});
+			groupLootTable.setRowHeight(rowIdx, 28);
+			rowIdx++;
+		}
+		refreshGroupLootTotals();
+	}
+
+	private void refreshGroupLootTotals()
+	{
+		if (groupLootTotalsLabel == null)
+		{
+			return;
+		}
+		int tw = FluxUi.textWidth();
+		long total = partyLootTracker.sumLoggedLootValueGp();
+		int partyN = partyLootTracker.getPartySizeForSplit();
+		if (partyLootTracker.snapshotRows().isEmpty())
+		{
+			groupLootTotalsLabel.setText("<html><div style='width:" + tw + "px;color:#a8a8a8'>"
+				+ "Total and per-person split appear here once loot is logged. <b>Party</b> count uses your "
+				+ "RuneLite party (same as Party Panel).</div></html>");
+			return;
+		}
+		long each = total / partyN;
+		long rem = total % partyN;
+		String totalStr = WikiLinks.formatGpCompact(total) + " gp";
+		String eachStr = WikiLinks.formatGpCompact(each) + " gp";
+		String remPart = rem > 0
+			? " <span style='color:#888'>(" + rem + " gp remainder)</span>"
+			: "";
+		groupLootTotalsLabel.setText("<html><div style='width:" + tw + "px;color:#e0e0e0'>"
+			+ "<b style='color:#ffcc00'>Total</b> " + totalStr
+			+ " &nbsp;·&nbsp; <b style='color:#ffcc00'>Party</b> " + partyN
+			+ " &nbsp;·&nbsp; <b style='color:#ffcc00'>Each</b> " + eachStr + remPart
+			+ "</div></html>");
+	}
+
+	private JPanel buildGroupTab()
+	{
+		final int tw = FluxUi.textWidth();
+		JPanel root = new JPanel(new BorderLayout());
+		root.setBackground(FluxUi.BG);
+		root.setBorder(new EmptyBorder(4, 6, 4, 6));
+
+		JPanel north = new JPanel();
+		north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+		north.setOpaque(false);
+
+		JLabel title = new JLabel("<html><div style='width:" + tw + "px;text-align:center'><b>Party loot log</b></div></html>");
+		title.setForeground(FluxUi.HEADER_GOLD);
+		title.setFont(title.getFont().deriveFont(Font.BOLD, 14f));
+		title.setAlignmentX(Component.CENTER_ALIGNMENT);
+		north.add(title);
+
+		JLabel blurb = new JLabel("<html><div style='width:" + tw + "px;color:#a8a8a8'>Join a RuneLite party (Party plugin) with the same passphrase as your friends. Your own NPC/PvP drops appear here immediately; other members need Terpinheimer with Party loot enabled to share. <b>Cost</b> uses GE guide prices. Click <b>Remove</b> on a row to delete it from this log only. The footer shows <b>Total</b> loot in this log and an equal <b>Each</b> split by party size.</div></html>");
+		blurb.setAlignmentX(Component.CENTER_ALIGNMENT);
+		north.add(blurb);
+
+		JButton clearBtn = FluxUi.pillButton("Clear list");
+		clearBtn.setAlignmentX(Component.CENTER_ALIGNMENT);
+		clearBtn.addActionListener(e ->
+		{
+			partyLootTracker.clearRows();
+			refreshGroupLootTable();
+		});
+		north.add(Box.createVerticalStrut(6));
+		north.add(clearBtn);
+
+		root.add(north, BorderLayout.NORTH);
+
+		String[] cols = {"User", "Drop", "Cost", "Remove"};
+		groupLootModel = new DefaultTableModel(cols, 0)
+		{
+			@Override
+			public boolean isCellEditable(int r, int c)
+			{
+				return false;
+			}
+		};
+		groupLootTable = new JTable(groupLootModel);
+		FluxUi.styleDataTable(groupLootTable);
+		TableColumnModel tcm = groupLootTable.getColumnModel();
+		if (tcm.getColumnCount() >= 4)
+		{
+			tcm.getColumn(0).setPreferredWidth(Math.min(100, tw / 4));
+			tcm.getColumn(1).setPreferredWidth(tw - 200);
+			tcm.getColumn(2).setPreferredWidth(72);
+			tcm.getColumn(3).setPreferredWidth(56);
+		}
+		groupLootTable.setRowHeight(32);
+		groupLootTable.setFillsViewportHeight(true);
+		groupLootTable.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				int r = groupLootTable.rowAtPoint(e.getPoint());
+				int c = groupLootTable.columnAtPoint(e.getPoint());
+				if (r < 0 || c != GROUP_COL_REMOVE || r >= groupLootRowIds.size())
+				{
+					return;
+				}
+				partyLootTracker.removeRow(groupLootRowIds.get(r));
+			}
+		});
+
+		JScrollPane scroll = new JScrollPane(groupLootTable);
+		scroll.setBorder(FluxUi.tableBorder());
+		scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+		scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+
+		groupLootTotalsLabel = new JLabel(" ");
+		groupLootTotalsLabel.setOpaque(false);
+		groupLootTotalsLabel.setBorder(new EmptyBorder(8, 4, 4, 4));
+
+		JPanel tableArea = new JPanel(new BorderLayout());
+		tableArea.setBackground(FluxUi.BG);
+		tableArea.setOpaque(true);
+		tableArea.add(scroll, BorderLayout.CENTER);
+		tableArea.add(groupLootTotalsLabel, BorderLayout.SOUTH);
+		root.add(tableArea, BorderLayout.CENTER);
+
+		refreshGroupLootTotals();
+
+		return root;
 	}
 
 	/** Opens the embedded attendance view from Home (not a bottom-tab duplicate). */
@@ -209,6 +442,10 @@ public class TerpinheimerPanel extends PluginPanel
 		for (JButton tabButton : tabButtons)
 		{
 			refreshTabStyle(tabButton, false);
+		}
+		if (groupTabBarVisible)
+		{
+			refreshTabStyle(groupTabButton, false);
 		}
 		cards.show(cardHost, CARD_ATTENDANCE);
 		revalidate();
@@ -238,13 +475,6 @@ public class TerpinheimerPanel extends PluginPanel
 		title.setFont(title.getFont().deriveFont(Font.BOLD, 15f));
 		title.setAlignmentX(Component.CENTER_ALIGNMENT);
 		north.add(title);
-
-		JLabel sub = new JLabel();
-		sub.setForeground(FluxUi.MUTED);
-		sub.setFont(sub.getFont().deriveFont(11f));
-		sub.setAlignmentX(Component.CENTER_ALIGNMENT);
-		sub.setText("<html><div style='width:" + tw + "px;text-align:center'>" + htmlEscape(config.clanName()) + "</div></html>");
-		north.add(sub);
 
 		BufferedImage logo = readLogo();
 		if (logo != null)
@@ -284,6 +514,7 @@ public class TerpinheimerPanel extends PluginPanel
 		announcementsArea.setColumns(0);
 		announcementsArea.setMinimumSize(new Dimension(50, 72));
 		announcementsArea.setPreferredSize(new Dimension(0, 92));
+		announcementsArea.addMouseWheelListener(this::forwardWheelToPluginScrollPane);
 		body.add(announcementsArea, gbc);
 
 		gbc.gridy = 2;
@@ -363,13 +594,43 @@ public class TerpinheimerPanel extends PluginPanel
 		gbc.fill = GridBagConstraints.BOTH;
 		body.add(Box.createGlue(), gbc);
 
-		JScrollPane scroll = new JScrollPane(body);
-		scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-		scroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-		scroll.setBorder(null);
-		scroll.getViewport().setBackground(FluxUi.BG);
-		root.add(scroll, BorderLayout.CENTER);
+		// No nested JScrollPane: PluginPanel already wraps this panel in a scroll pane.
+		root.add(body, BorderLayout.CENTER);
 		return root;
+	}
+
+	/** Non-editable {@link JTextArea} still consumes wheel events; scroll the sidebar {@link JScrollPane} instead. */
+	private void forwardWheelToPluginScrollPane(MouseWheelEvent e)
+	{
+		JScrollPane sp = getScrollPane();
+		if (sp == null)
+		{
+			return;
+		}
+		JScrollBar bar = sp.getVerticalScrollBar();
+		if (bar == null)
+		{
+			return;
+		}
+		int delta;
+		if (e.getScrollType() == MouseWheelEvent.WHEEL_UNIT_SCROLL)
+		{
+			int u = e.getUnitsToScroll();
+			delta = u * bar.getUnitIncrement();
+		}
+		else
+		{
+			delta = e.getWheelRotation() * bar.getBlockIncrement();
+		}
+		if (delta == 0)
+		{
+			delta = e.getWheelRotation() * bar.getUnitIncrement() * 3;
+		}
+		int next = bar.getValue() + delta;
+		int max = Math.max(bar.getMinimum(), bar.getMaximum() - bar.getVisibleAmount());
+		next = Math.max(bar.getMinimum(), Math.min(max, next));
+		bar.setValue(next);
+		e.consume();
 	}
 
 	private static void applyTwoColWidths(JTable t, int cw)
@@ -595,12 +856,7 @@ public class TerpinheimerPanel extends PluginPanel
 		inner.setBackground(FluxUi.BG);
 		inner.setBorder(new EmptyBorder(4, 8, 4, 8));
 		inner.add(head, BorderLayout.NORTH);
-		JScrollPane pageScroll = new JScrollPane(center);
-		pageScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-		pageScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-		pageScroll.setBorder(null);
-		pageScroll.getViewport().setBackground(FluxUi.BG);
-		inner.add(pageScroll, BorderLayout.CENTER);
+		inner.add(center, BorderLayout.CENTER);
 		return inner;
 	}
 
@@ -689,12 +945,7 @@ public class TerpinheimerPanel extends PluginPanel
 		inner.setBackground(FluxUi.BG);
 		inner.setBorder(new EmptyBorder(4, 8, 4, 8));
 		inner.add(head, BorderLayout.NORTH);
-		JScrollPane pageScroll = new JScrollPane(center);
-		pageScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-		pageScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-		pageScroll.setBorder(null);
-		pageScroll.getViewport().setBackground(FluxUi.BG);
-		inner.add(pageScroll, BorderLayout.CENTER);
+		inner.add(center, BorderLayout.CENTER);
 		return inner;
 	}
 
@@ -743,12 +994,7 @@ public class TerpinheimerPanel extends PluginPanel
 		inner.setBackground(FluxUi.BG);
 		inner.setBorder(new EmptyBorder(4, 8, 4, 8));
 		inner.add(head, BorderLayout.NORTH);
-		JScrollPane pageScroll = new JScrollPane(center);
-		pageScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-		pageScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-		pageScroll.setBorder(null);
-		pageScroll.getViewport().setBackground(FluxUi.BG);
-		inner.add(pageScroll, BorderLayout.CENTER);
+		inner.add(center, BorderLayout.CENTER);
 		return inner;
 	}
 
@@ -822,7 +1068,7 @@ public class TerpinheimerPanel extends PluginPanel
 		}
 		else if ("—".equals(st))
 		{
-			metaLine = "Set Links → Clan calendar summary API (use ?format=array for the table below).";
+			metaLine = "Set Links → Clan calendar page URL & summary API (?format=array for the table).";
 		}
 		else
 		{
@@ -960,13 +1206,13 @@ public class TerpinheimerPanel extends PluginPanel
 		if (s.getPhase() == WomLeaderboardModels.EventPhase.FINISHED && s.getWinner() != null)
 		{
 			WomLeaderboardModels.LeaderRow w = s.getWinner();
-			String line = "Winner: " + w.getPlayerName() + " — " + formatGain(w.getGained(), sotw);
+			String line = "Winner: " + w.getPlayerName() + " — " + formatGain(w.getGained());
 			setWinnerBanner(winner, "<html><div style='width:" + tw + "px;text-align:center'>" + htmlEscape(line) + "</div></html>");
 		}
 		else if (s.getPhase() == WomLeaderboardModels.EventPhase.FINISHED && !s.getTop10().isEmpty())
 		{
 			WomLeaderboardModels.LeaderRow w = s.getTop10().get(0);
-			String line = "Winner: " + w.getPlayerName() + " — " + formatGain(w.getGained(), sotw);
+			String line = "Winner: " + w.getPlayerName() + " — " + formatGain(w.getGained());
 			setWinnerBanner(winner, "<html><div style='width:" + tw + "px;text-align:center'>" + htmlEscape(line) + "</div></html>");
 		}
 		else
@@ -997,7 +1243,7 @@ public class TerpinheimerPanel extends PluginPanel
 			model.addRow(new Object[]{
 				row.getRank(),
 				row.getPlayerName(),
-				formatGain(row.getGained(), sotw)
+				formatGain(row.getGained())
 			});
 			tips.add(row.getTooltip());
 		}
@@ -1005,12 +1251,8 @@ public class TerpinheimerPanel extends PluginPanel
 		table.repaint();
 	}
 
-	private static String formatGain(long g, boolean sotw)
+	private static String formatGain(long g)
 	{
-		if (sotw)
-		{
-			return String.format(Locale.US, "%,d", g);
-		}
 		return String.format(Locale.US, "%,d", g);
 	}
 

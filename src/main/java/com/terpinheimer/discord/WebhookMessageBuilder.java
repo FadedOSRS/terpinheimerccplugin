@@ -54,9 +54,11 @@ public class WebhookMessageBuilder
 		return f;
 	}
 
-	public JsonObject deathDinkStyleEmbed(String authorName)
+	public JsonObject deathDinkStyleEmbed(String authorName, String deathReason)
 	{
-		return dinkChromeEmbed(0xE74C3C, authorName, "Death", "Your character has died.", null, null);
+		String reason = deathReason != null && !deathReason.isBlank() ? deathReason.trim() : "unknown causes";
+		String description = "OH NO! " + authorName + " perished to " + reason;
+		return dinkChromeEmbed(0xE74C3C, authorName, "Death", description, null, null);
 	}
 
 	public JsonObject clueRewardDinkStyleEmbed(
@@ -79,9 +81,36 @@ public class WebhookMessageBuilder
 		return dinkChromeEmbed(0xF1C40F, authorName, "Pet", description, null, null);
 	}
 
-	public JsonObject collectionLogDinkStyleEmbed(String authorName, String description)
+	/**
+	 * Dink/RNJesus-style collection log: magenta bar, optional item thumbnail, stat row + completion count.
+	 * Field values use inline code spans so Discord renders grey “boxed” values.
+	 */
+	public JsonObject collectionLogDinkStyleEmbed(
+		String authorName,
+		String description,
+		String thumbnailUrlOrNull,
+		String completedDisplay,
+		String rankDisplay,
+		String sourceDisplay,
+		String completionCountDisplay)
 	{
-		return dinkChromeEmbed(0xE67E22, authorName, "Collection log", description, null, null);
+		JsonArray fields = new JsonArray();
+		fields.add(field("Completed", discordInlineCode(completedDisplay), true));
+		fields.add(field("Rank", discordInlineCode(rankDisplay), true));
+		fields.add(field("Source", discordInlineCode(sourceDisplay), true));
+		fields.add(field("Completion Count", discordInlineCode(completionCountDisplay), false));
+		return dinkChromeEmbed(0xEB459E, authorName, "Collection Log", description, thumbnailUrlOrNull, fields);
+	}
+
+	private static String discordInlineCode(String content)
+	{
+		String c = content == null || content.isBlank() ? "—" : content.trim();
+		c = c.replace("`", "'");
+		if (c.length() > 1000)
+		{
+			c = c.substring(0, 997) + "...";
+		}
+		return "`" + c + "`";
 	}
 
 	/**

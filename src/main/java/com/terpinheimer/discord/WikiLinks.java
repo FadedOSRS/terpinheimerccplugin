@@ -3,7 +3,7 @@ package com.terpinheimer.discord;
 /**
  * Old School RuneScape Wiki URLs for Discord markdown links.
  */
-final class WikiLinks
+public final class WikiLinks
 {
 	private WikiLinks()
 	{
@@ -43,7 +43,7 @@ final class WikiLinks
 		return "[" + escapeLinkLabel(label) + "](" + url + ")";
 	}
 
-	static String formatGpCompact(long gp)
+	public static String formatGpCompact(long gp)
 	{
 		if (gp >= 1_000_000L)
 		{

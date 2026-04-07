@@ -2,6 +2,8 @@ package com.terpinheimer;
 
 import com.google.gson.Gson;
 import com.google.inject.Provides;
+import com.terpinheimer.attendance.ClanAttendanceTracker;
+import com.terpinheimer.discord.ClanCofferDonationEventHandler;
 import com.terpinheimer.discord.ClueScrollEventHandler;
 import com.terpinheimer.discord.CollectionLogEventHandler;
 import com.terpinheimer.discord.CombatAchievementEventHandler;
@@ -12,8 +14,8 @@ import com.terpinheimer.discord.LootEventHandler;
 import com.terpinheimer.discord.PetEventHandler;
 import com.terpinheimer.discord.QuestEventHandler;
 import com.terpinheimer.discord.WebhookDispatcher;
-import com.terpinheimer.attendance.ClanAttendanceTracker;
 import com.terpinheimer.map.LiveMapEventHandler;
+import com.terpinheimer.party.PartyLootTracker;
 import com.terpinheimer.ui.TerpinheimerPanel;
 import com.terpinheimer.runeprofile.RuneProfileLogoutPayload;
 import com.terpinheimer.runeprofile.RuneProfileUpdateService;
@@ -105,6 +107,8 @@ public class TerpinheimerPlugin extends Plugin
 	@Inject
 	private CombatAchievementEventHandler combatAchievementEventHandler;
 	@Inject
+	private ClanCofferDonationEventHandler clanCofferDonationEventHandler;
+	@Inject
 	private DiscordLoginGrace discordLoginGrace;
 	@Inject
 	private LiveMapEventHandler liveMapEventHandler;
@@ -112,6 +116,8 @@ public class TerpinheimerPlugin extends Plugin
 	private ClanCalendarSummaryService clanCalendarSummaryService;
 	@Inject
 	private ClanAttendanceTracker clanAttendanceTracker;
+	@Inject
+	private PartyLootTracker partyLootTracker;
 
 	private String sessionPlayerName;
 	private long sessionBaselineXp;
@@ -210,15 +216,20 @@ public class TerpinheimerPlugin extends Plugin
 		eventBus.register(collectionLogEventHandler);
 		eventBus.register(questEventHandler);
 		eventBus.register(combatAchievementEventHandler);
+		eventBus.register(clanCofferDonationEventHandler);
 		eventBus.register(liveMapEventHandler);
 		eventBus.register(clanAttendanceTracker);
+		partyLootTracker.start();
+		eventBus.register(partyLootTracker);
 		worker = Executors.newSingleThreadExecutor(r ->
 		{
 			Thread t = new Thread(r, "terpinheimer-fetch");
 			t.setDaemon(true);
 			return t;
 		});
-		panel = new TerpinheimerPanel(this, config);
+		panel = new TerpinheimerPanel(this, config, partyLootTracker);
+		partyLootTracker.setUiRefresh(panel::syncPartyGroupTabUi);
+		partyLootTracker.syncVisibility();
 		navButton = createNavigationButton();
 		clientToolbar.addNavigation(navButton);
 		scheduleRefresh();
@@ -232,8 +243,12 @@ public class TerpinheimerPlugin extends Plugin
 	{
 		cancelRefresh();
 		eventBus.unregister(clanAttendanceTracker);
+		eventBus.unregister(partyLootTracker);
+		partyLootTracker.stop();
+		partyLootTracker.setUiRefresh(null);
 		eventBus.unregister(liveMapEventHandler);
 		eventBus.unregister(combatAchievementEventHandler);
+		eventBus.unregister(clanCofferDonationEventHandler);
 		eventBus.unregister(questEventHandler);
 		eventBus.unregister(collectionLogEventHandler);
 		eventBus.unregister(levelEventHandler);
@@ -379,9 +394,10 @@ public class TerpinheimerPlugin extends Plugin
 			return;
 		}
 		long totalXp = client.getOverallExperience();
+		boolean hadProgress = Math.abs(totalXp - sessionBaselineXp) > WOM_UPDATE_XP_THRESHOLD || levelUpThisSession;
 		boolean shouldPost = sessionPlayerName != null
 			&& !sessionPlayerName.isEmpty()
-			&& (Math.abs(totalXp - sessionBaselineXp) > WOM_UPDATE_XP_THRESHOLD || levelUpThisSession);
+			&& (!config.womRuneprofileSyncOnlyAfterProgress() || hadProgress);
 
 		final String nameForWom = sessionPlayerName;
 		levelUpThisSession = false;

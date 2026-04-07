@@ -10,12 +10,16 @@ import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.Varbits;
 import net.runelite.api.clan.ClanMember;
+import net.runelite.api.clan.ClanRank;
 import net.runelite.api.clan.ClanSettings;
+import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.util.Text;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Pushes the local player's world position on a throttled schedule so a clan website can plot it,
@@ -24,6 +28,8 @@ import net.runelite.client.util.Text;
 @Singleton
 public class LiveMapEventHandler
 {
+	private static final Logger log = LoggerFactory.getLogger(LiveMapEventHandler.class);
+
 	private final Client client;
 	private final TerpinheimerConfig config;
 	private final Gson gson;
@@ -71,45 +77,52 @@ public class LiveMapEventHandler
 			return;
 		}
 
-		if (!config.liveMapSendInWilderness() && client.getVarbitValue(Varbits.IN_WILDERNESS) != 0)
+		try
 		{
-			return;
-		}
+			if (!config.liveMapSendInWilderness() && client.getVarbitValue(Varbits.IN_WILDERNESS) != 0)
+			{
+				return;
+			}
 
-		Player player = client.getLocalPlayer();
-		if (player == null)
+			Player player = client.getLocalPlayer();
+			if (player == null)
+			{
+				return;
+			}
+			LocalPoint local = player.getLocalLocation();
+			if (local == null)
+			{
+				return;
+			}
+			WorldPoint worldPoint = WorldPoint.fromLocalInstance(client, local);
+			if (worldPoint == null)
+			{
+				return;
+			}
+
+			String displayName = Text.removeTags(player.getName());
+			if (displayName == null || displayName.isBlank())
+			{
+				return;
+			}
+
+			JsonObject waypoint = new JsonObject();
+			waypoint.addProperty("x", worldPoint.getX());
+			waypoint.addProperty("y", worldPoint.getY());
+			waypoint.addProperty("plane", worldPoint.getPlane());
+
+			JsonObject root = new JsonObject();
+			root.addProperty("name", displayName);
+			root.add("waypoint", waypoint);
+			root.addProperty("title", clanTitleForPlayer(displayName));
+			root.addProperty("world", client.getWorld());
+
+			liveMapService.postPlayerLocation(postUrl, key, gson.toJson(root));
+		}
+		catch (RuntimeException e)
 		{
-			return;
+			log.debug("Terpinheimer: live map tick skipped ({})", e.toString());
 		}
-		LocalPoint local = player.getLocalLocation();
-		if (local == null)
-		{
-			return;
-		}
-		WorldPoint worldPoint = WorldPoint.fromLocalInstance(client, local);
-		if (worldPoint == null)
-		{
-			return;
-		}
-
-		String displayName = Text.removeTags(player.getName());
-		if (displayName == null || displayName.isBlank())
-		{
-			return;
-		}
-
-		JsonObject waypoint = new JsonObject();
-		waypoint.addProperty("x", worldPoint.getX());
-		waypoint.addProperty("y", worldPoint.getY());
-		waypoint.addProperty("plane", worldPoint.getPlane());
-
-		JsonObject root = new JsonObject();
-		root.addProperty("name", displayName);
-		root.add("waypoint", waypoint);
-		root.addProperty("title", clanTitleForPlayer(displayName));
-		root.addProperty("world", client.getWorld());
-
-		liveMapService.postPlayerLocation(postUrl, key, gson.toJson(root));
 	}
 
 	private static boolean isValidHttpsBase(String url)
@@ -124,16 +137,38 @@ public class LiveMapEventHandler
 
 	private String clanTitleForPlayer(String playerName)
 	{
-		ClanSettings settings = client.getClanSettings();
-		if (settings == null)
+		try
+		{
+			ClanSettings settings = client.getClanSettings();
+			if (settings == null)
+			{
+				return "";
+			}
+			ClanMember member = settings.findMember(playerName);
+			if (member == null)
+			{
+				member = settings.findMember(Text.standardize(playerName));
+			}
+			if (member == null)
+			{
+				return "";
+			}
+			ClanRank rank = member.getRank();
+			if (rank == null)
+			{
+				return "";
+			}
+			ClanTitle title = settings.titleForRank(rank);
+			if (title == null)
+			{
+				return "";
+			}
+			String name = title.getName();
+			return name != null ? name : "";
+		}
+		catch (RuntimeException e)
 		{
 			return "";
 		}
-		ClanMember member = settings.findMember(playerName);
-		if (member == null)
-		{
-			return "";
-		}
-		return settings.titleForRank(member.getRank()).getName();
 	}
 }

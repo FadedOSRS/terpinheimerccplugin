@@ -11,6 +11,8 @@ import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.Varbits;
 import net.runelite.client.util.Text;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Builds the JSON body for {@code POST https://api.runeprofile.com/profiles} (same contract as the
@@ -20,6 +22,8 @@ import net.runelite.client.util.Text;
  */
 public final class RuneProfileLogoutPayload
 {
+	private static final Logger log = LoggerFactory.getLogger(RuneProfileLogoutPayload.class);
+
 	private RuneProfileLogoutPayload()
 	{
 	}
@@ -43,44 +47,52 @@ public final class RuneProfileLogoutPayload
 			return null;
 		}
 
-		JsonObject root = new JsonObject();
-		root.addProperty("id", id);
-		root.addProperty("username", username);
-		root.addProperty("accountType", client.getVarbitValue(Varbits.ACCOUNT_TYPE));
-
-		JsonObject skills = new JsonObject();
-		for (Skill skill : Skill.values())
+		try
 		{
-			skills.addProperty(skill.getName(), client.getSkillExperience(skill));
-		}
-		root.add("skills", skills);
+			JsonObject root = new JsonObject();
+			root.addProperty("id", id);
+			root.addProperty("username", username);
+			root.addProperty("accountType", client.getVarbitValue(Varbits.ACCOUNT_TYPE));
 
-		JsonObject quests = new JsonObject();
-		for (Quest quest : Quest.values())
+			JsonObject skills = new JsonObject();
+			for (Skill skill : Skill.values())
+			{
+				skills.addProperty(skill.getName(), client.getSkillExperience(skill));
+			}
+			root.add("skills", skills);
+
+			JsonObject quests = new JsonObject();
+			for (Quest quest : Quest.values())
+			{
+				int state;
+				QuestState st = quest.getState(client);
+				if (st == QuestState.IN_PROGRESS)
+				{
+					state = 1;
+				}
+				else if (st == QuestState.FINISHED)
+				{
+					state = 2;
+				}
+				else
+				{
+					state = 0;
+				}
+				quests.addProperty(String.valueOf(quest.getId()), state);
+			}
+			root.add("quests", quests);
+
+			root.add("combatAchievementTiers", new JsonObject());
+			root.add("achievementDiaryTiers", new JsonArray());
+			root.add("items", new JsonObject());
+
+			root.addProperty("eventSource", "terpinheimer_logout");
+			return gson.toJson(root);
+		}
+		catch (RuntimeException e)
 		{
-			int state;
-			QuestState st = quest.getState(client);
-			if (st == QuestState.IN_PROGRESS)
-			{
-				state = 1;
-			}
-			else if (st == QuestState.FINISHED)
-			{
-				state = 2;
-			}
-			else
-			{
-				state = 0;
-			}
-			quests.addProperty(String.valueOf(quest.getId()), state);
+			log.warn("Terpinheimer: RuneProfile logout payload skipped after client/API change: {}", e.toString());
+			return null;
 		}
-		root.add("quests", quests);
-
-		root.add("combatAchievementTiers", new JsonObject());
-		root.add("achievementDiaryTiers", new JsonArray());
-		root.add("items", new JsonObject());
-
-		root.addProperty("eventSource", "terpinheimer_logout");
-		return gson.toJson(root);
 	}
 }
