@@ -1,56 +1,40 @@
 # Terpinheimer
 
-A RuneLite plugin that provides a centralized clan hub with Home, Skill of the Week (SOTW), and Boss of the Week (BOTW) views.
-
----
+A RuneLite plugin that adds a clan hub sidebar with Home, Skill of the Week, and Boss of the Week views.
 
 ## Features
 
-### Home Panel
+### Home panel
 
-* Displays announcements and live event status
-* Includes configurable quick links (Discord, WOM group, etc.)
+Announcements, live event status, and configurable quick links.
 
-### SOTW & BOTW Tracking
+### SOTW & BOTW tracking
 
-* Live leaderboards powered by Wise Old Man
-* Automatically detects active SOTW/BOTW competitions
-* Shows:
+- Live leaderboards from [Wise Old Man](https://wiseoldman.net/)
+- Auto-detects SOTW/BOTW competitions
+- Shows rankings, countdown timers, and quick links to competition pages
 
-  * Player rankings
-  * Countdown timers
-  * Direct links to competition pages
+### Discord integration (optional)
 
-### Discord Integration (Optional)
+- One webhook for enabled notifications
+- Sends notifications for loot, levels, clues, pets, collection log, and deaths
+- Supports embedded messages and optional screenshots
 
-* Supports a single webhook for all notifications
-* Sends alerts for:
+### Profile sync
 
-  * Loot
-  * Level-ups
-  * Clues
-  * Pets
-  * Collection log entries
-  * Deaths
-* Optional embedded messages and screenshots
-
-### Profile Sync
-
-* Optionally updates Wise Old Man on logout
-* Triggers when XP thresholds are reached
-
----
+Optionally updates Wise Old Man on logout when XP thresholds are met.
 
 ## Configuration
 
-* Set your **Wise Old Man Group ID**
-* Add optional quick links (Discord, WOM group URL, etc.)
-* Configure a Discord webhook and select notification types
-
----
+- Set your **Wise Old Man group ID**
+- Add optional quick links (Discord, WOM group URL, channels, etc.)
+- Configure one Discord webhook and notification settings
 
 ## Credits
 
-* Wise Old Man for competition tracking and leaderboards
-* Dink for notification and webhook inspiration
-* RuneLite community plugins for general structure and UX patterns
+Inspired by existing RuneLite community tools and patterns:
+
+- Wise Old Man integrations for competition tracking and leaderboards
+- Notification and webhook systems similar to Dink
+- Structured clan-management workflows inspired by inventory/setup QoL plugins
+- clan-event-attendance for clan attendance tracking inspiration
