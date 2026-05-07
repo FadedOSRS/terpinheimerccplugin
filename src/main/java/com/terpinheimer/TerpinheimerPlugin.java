@@ -42,6 +42,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.clan.ClanMember;
 import net.runelite.api.clan.ClanRank;
 import net.runelite.api.clan.ClanSettings;
+import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
@@ -460,8 +461,8 @@ public class TerpinheimerPlugin extends Plugin
 	}
 
 	/**
-	 * Only Owner and Deputy Owner may persist {@link TerpinheimerConfig#announcementsText()}; no other
-	 * settings use this check.
+	 * Clan admins (Owner / Administrator / Event Manager title) may persist
+	 * {@link TerpinheimerConfig#announcementsText()}; no other settings use this check.
 	 */
 	private boolean canEditAnnouncementsAsClanOfficer()
 	{
@@ -496,7 +497,13 @@ public class TerpinheimerPlugin extends Plugin
 			return false;
 		}
 		ClanRank rank = member.getRank();
-		return ClanRank.OWNER.equals(rank) || ClanRank.DEPUTY_OWNER.equals(rank);
+		if (ClanRank.OWNER.equals(rank) || ClanRank.ADMINISTRATOR.equals(rank))
+		{
+			return true;
+		}
+		ClanTitle title = settings.titleForRank(rank);
+		String titleName = title != null ? title.getName() : null;
+		return titleName != null && "Event Manager".equalsIgnoreCase(titleName.trim());
 	}
 
 	private int effectiveWomGroupId()

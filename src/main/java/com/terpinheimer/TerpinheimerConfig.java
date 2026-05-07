@@ -128,7 +128,7 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "announcementsText",
 		name = "Announcements text",
-		description = "Static text for the Home tab announcements block (use \\n for line breaks). Only Owner or Deputy Owner (Jagex clan rank, logged in) can save changes; other ranks revert to the last authorized text. Other plugin settings are not rank-locked.",
+		description = "Static text for the Home tab announcements block (use \\n for line breaks). Only Owner, Administrator, or Event Manager (Jagex clan role/title, logged in) can save changes; other ranks revert to the last authorized text. Other plugin settings are not rank-locked.",
 		position = 2,
 		section = SEC_GEN
 	)
