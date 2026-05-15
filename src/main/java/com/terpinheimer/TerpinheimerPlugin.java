@@ -1,6 +1,5 @@
 package com.terpinheimer;
 
-import com.google.gson.Gson;
 import com.google.inject.Provides;
 import com.terpinheimer.attendance.ClanAttendanceTracker;
 import com.terpinheimer.discord.ClanCofferDonationEventHandler;
@@ -17,17 +16,22 @@ import com.terpinheimer.discord.WebhookDispatcher;
 import com.terpinheimer.map.LiveMapEventHandler;
 import com.terpinheimer.party.PartyLootTracker;
 import com.terpinheimer.ui.TerpinheimerPanel;
-import com.terpinheimer.runeprofile.RuneProfileLogoutPayload;
-import com.terpinheimer.runeprofile.RuneProfileUpdateService;
 import com.terpinheimer.site.ClanCalendarSummaryService;
 import com.terpinheimer.site.ClanCalendarSummaryService.WebEventRow;
+import com.terpinheimer.site.ClanRosterSitePayloadBuilder;
+import com.terpinheimer.site.ClanRosterSnapshotTracker;
+import com.terpinheimer.site.ClogChronicleTracker;
+import com.terpinheimer.site.ClogSitePayloadBuilder;
+import com.terpinheimer.site.ClogSiteSyncService;
 import com.terpinheimer.wom.WomCompetitionService;
 import com.terpinheimer.wom.WomLeaderboardModels;
 import com.terpinheimer.wom.WomPlayerUpdateService;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,14 +40,15 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
 import net.runelite.api.clan.ClanMember;
 import net.runelite.api.clan.ClanRank;
 import net.runelite.api.clan.ClanSettings;
-import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -64,6 +69,10 @@ import net.runelite.client.util.Text;
 public class TerpinheimerPlugin extends Plugin
 {
 	private static final int WOM_UPDATE_XP_THRESHOLD = 10_000;
+	/** Batch rapid XP ticks into one site POST. */
+	private static final int CLOG_XP_SYNC_DEBOUNCE_SECONDS = 15;
+	/** ~45 minutes between automatic roster snapshots while logged in (600 ticks/min at normal game rate). */
+	private static final int CLAN_ROSTER_PERIODIC_TICKS = 4_500;
 	/** When General → Wise Old Man group ID is 0, use this group (legacy profiles often still store 0). */
 	private static final int DEFAULT_WOM_GROUP_ID = 23745;
 
@@ -71,8 +80,6 @@ public class TerpinheimerPlugin extends Plugin
 	private Client client;
 	@Inject
 	private ClientThread clientThread;
-	@Inject
-	private Gson gson;
 	@Inject
 	private ClientToolbar clientToolbar;
 	@Inject
@@ -87,8 +94,6 @@ public class TerpinheimerPlugin extends Plugin
 	private WomCompetitionService womCompetitionService;
 	@Inject
 	private WomPlayerUpdateService womPlayerUpdateService;
-	@Inject
-	private RuneProfileUpdateService runeProfileUpdateService;
 	@Inject
 	private WebhookDispatcher webhookDispatcher;
 	@Inject
@@ -119,16 +124,38 @@ public class TerpinheimerPlugin extends Plugin
 	private ClanAttendanceTracker clanAttendanceTracker;
 	@Inject
 	private PartyLootTracker partyLootTracker;
+	@Inject
+	private ClogChronicleTracker clogChronicleTracker;
+	@Inject
+	private ClogSitePayloadBuilder clogSitePayloadBuilder;
+	@Inject
+	private ClogSiteSyncService clogSiteSyncService;
+	@Inject
+	private ClanRosterSitePayloadBuilder clanRosterSitePayloadBuilder;
+	@Inject
+	private ClanRosterSnapshotTracker clanRosterSnapshotTracker;
 
 	private String sessionPlayerName;
 	private long sessionBaselineXp;
 	private boolean levelUpThisSession;
 	private final Map<Skill, Integer> skillLevelBaseline = new EnumMap<>(Skill.class);
+	private final Map<Skill, Integer> clogLastSkillXp = new EnumMap<>(Skill.class);
 
 	private TerpinheimerPanel panel;
 	private NavigationButton navButton;
 	private ExecutorService worker;
 	private ScheduledFuture<?> refreshTask;
+	private volatile ScheduledFuture<?> clogXpSyncDebounce;
+	private volatile ScheduledFuture<?> clanRosterLoginDelayTask;
+	private int ticksUntilClanRosterPeriodic = -1;
+	/**
+	 * Refreshed every {@link GameTick} on the client thread while the plugin is running. {@code true} when
+	 * logged in and the local player is the Jagex clan Owner. Used for automatic roster POST and for the
+	 * sidebar Home button (read from the EDT via {@link #isLocalPlayerJagexClanOwnerCached()}).
+	 */
+	private volatile boolean clanOwnerForRosterAutoSync;
+	/** Previous game state for roster snapshot reset (skip reset on world hop). */
+	private GameState rosterDiffPrevGameState = GameState.LOGIN_SCREEN;
 
 	private volatile WomLeaderboardModels.CompetitionSnapshot sotwSnapshot =
 		WomLeaderboardModels.CompetitionSnapshot.empty("Loading…");
@@ -203,6 +230,61 @@ public class TerpinheimerPlugin extends Plugin
 		}
 	}
 
+	/** Manual roster POST from the sidebar (does not require "Sync Jagex clan roster" to be on). */
+	public void requestClanRosterSiteSync()
+	{
+		enqueueClanRosterSitePost(false);
+	}
+
+	public boolean isClanRosterManualSyncReady()
+	{
+		return isClanRosterSyncConfigured();
+	}
+
+	/**
+	 * Manual collection log POST from the Terpinheimer sidebar (does not require "Sync collection log to website").
+	 * Jagex removed/changed in-game collection log menu entries; use this button for an on-demand site sync.
+	 */
+	public void requestClogSiteManualSync()
+	{
+		if (!isClogSyncConfigured())
+		{
+			return;
+		}
+		if (worker == null || worker.isShutdown())
+		{
+			clientThread.invokeLater(() -> clogManualSyncChat(
+				"Cannot sync collection log: plugin background worker is not running. Try toggling the plugin off and on."));
+			return;
+		}
+		clientThread.invokeLater(() ->
+		{
+			if (worker == null || worker.isShutdown())
+			{
+				clogManualSyncChat(
+					"Cannot sync collection log: plugin background worker is not running. Try toggling the plugin off and on.");
+				return;
+			}
+			if (client.getGameState() != GameState.LOGGED_IN)
+			{
+				clogManualSyncChat("Cannot sync collection log: log in first.");
+				return;
+			}
+			List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
+			String json = clogSitePayloadBuilder.buildJson(client, snap);
+			worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
+				config.clogSyncApiUrl().trim(),
+				config.clogSyncApiSecret(),
+				json,
+				true));
+		});
+	}
+
+	public boolean isClogSiteManualSyncReady()
+	{
+		return isClogSyncConfigured();
+	}
+
 	@Override
 	protected void startUp()
 	{
@@ -222,6 +304,7 @@ public class TerpinheimerPlugin extends Plugin
 		eventBus.register(clanAttendanceTracker);
 		partyLootTracker.start();
 		eventBus.register(partyLootTracker);
+		eventBus.register(clogChronicleTracker);
 		worker = Executors.newSingleThreadExecutor(r ->
 		{
 			Thread t = new Thread(r, "terpinheimer-fetch");
@@ -237,16 +320,21 @@ public class TerpinheimerPlugin extends Plugin
 		String initialAnnouncements = config.announcementsText();
 		lastAuthorizedAnnouncementsText = initialAnnouncements != null ? initialAnnouncements : "";
 		worker.execute(this::pullAll);
+		rosterDiffPrevGameState = client.getGameState();
 	}
 
 	@Override
 	protected void shutDown()
 	{
+		cancelClogXpSyncDebounce();
+		cancelClanRosterLoginDelay();
+		clanRosterSnapshotTracker.reset();
 		cancelRefresh();
 		eventBus.unregister(clanAttendanceTracker);
 		eventBus.unregister(partyLootTracker);
 		partyLootTracker.stop();
 		partyLootTracker.setUiRefresh(null);
+		eventBus.unregister(clogChronicleTracker);
 		eventBus.unregister(liveMapEventHandler);
 		eventBus.unregister(combatAchievementEventHandler);
 		eventBus.unregister(clanCofferDonationEventHandler);
@@ -308,6 +396,22 @@ public class TerpinheimerPlugin extends Plugin
 		{
 			requestFullRefresh();
 		}
+			if ("clanRosterSyncEnabled".equals(ev.getKey()) || "clanRosterSyncApiUrl".equals(ev.getKey())
+				|| "clanRosterSyncApiSecret".equals(ev.getKey()))
+			{
+				if (client.getGameState() == GameState.LOGGED_IN
+					&& config.clanRosterSyncEnabled() && isClanRosterSyncConfigured()
+					&& isLocalPlayerJagexClanOwner())
+				{
+					ticksUntilClanRosterPeriodic = CLAN_ROSTER_PERIODIC_TICKS;
+					scheduleClanRosterSyncAfterLogin();
+				}
+			else
+			{
+				ticksUntilClanRosterPeriodic = -1;
+				cancelClanRosterLoginDelay();
+			}
+		}
 	}
 
 	private NavigationButton createNavigationButton()
@@ -341,9 +445,18 @@ public class TerpinheimerPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged ev)
 	{
 		GameState state = ev.getGameState();
+		GameState prev = rosterDiffPrevGameState;
 		switch (state)
 		{
 			case LOGGED_IN:
+				if (prev != GameState.HOPPING)
+				{
+					clanRosterSnapshotTracker.reset();
+				}
+				cancelClogXpSyncDebounce();
+				cancelClanRosterLoginDelay();
+				clogLastSkillXp.clear();
+				clogChronicleTracker.clear();
 				skillLevelBaseline.clear();
 				levelUpThisSession = false;
 				if (client.getLocalPlayer() != null)
@@ -351,14 +464,27 @@ public class TerpinheimerPlugin extends Plugin
 					sessionPlayerName = Text.removeTags(client.getLocalPlayer().getName());
 				}
 				sessionBaselineXp = client.getOverallExperience();
+				clanOwnerForRosterAutoSync = isLocalPlayerJagexClanOwner();
+				if (config.clanRosterSyncEnabled() && isClanRosterSyncConfigured() && clanOwnerForRosterAutoSync)
+				{
+					ticksUntilClanRosterPeriodic = CLAN_ROSTER_PERIODIC_TICKS;
+					scheduleClanRosterSyncAfterLogin();
+				}
+				else
+				{
+					ticksUntilClanRosterPeriodic = -1;
+					cancelClanRosterLoginDelay();
+				}
 				break;
 			case LOGIN_SCREEN:
 			case HOPPING:
-				onWiseOldManSessionEnd();
+				onSessionEndExternalSync();
+				clanOwnerForRosterAutoSync = false;
 				break;
 			default:
 				break;
 		}
+		rosterDiffPrevGameState = state;
 	}
 
 	@Subscribe
@@ -380,13 +506,52 @@ public class TerpinheimerPlugin extends Plugin
 			levelUpThisSession = true;
 		}
 		skillLevelBaseline.put(s, levelAfter);
+
+		maybeScheduleClogSiteSyncAfterSkillXp(s, ev.getXp());
 	}
 
-	private void onWiseOldManSessionEnd()
+	@Subscribe
+	public void onGameTick(GameTick tick)
 	{
-		boolean womOn = config.womUpdateProfileOnLogout();
-		boolean rpOn = config.runeprofileUpdateOnLogout();
-		if (!womOn && !rpOn)
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			clanOwnerForRosterAutoSync = isLocalPlayerJagexClanOwner();
+		}
+		else
+		{
+			clanOwnerForRosterAutoSync = false;
+		}
+
+		if (!config.clanRosterSyncEnabled() || !isClanRosterSyncConfigured()
+			|| client.getGameState() != GameState.LOGGED_IN)
+		{
+			ticksUntilClanRosterPeriodic = -1;
+			return;
+		}
+		if (!clanOwnerForRosterAutoSync)
+		{
+			ticksUntilClanRosterPeriodic = -1;
+			return;
+		}
+		if (ticksUntilClanRosterPeriodic <= 0)
+		{
+			return;
+		}
+		ticksUntilClanRosterPeriodic--;
+		if (ticksUntilClanRosterPeriodic == 0)
+		{
+			ticksUntilClanRosterPeriodic = CLAN_ROSTER_PERIODIC_TICKS;
+			enqueueClanRosterSitePost(true);
+		}
+	}
+
+	private void onSessionEndExternalSync()
+	{
+		boolean womWant = config.womUpdateProfileOnLogout();
+		boolean clogWant = config.clogSyncOnLogout() && isClogSyncConfigured();
+		boolean rosterWant = config.clanRosterSyncEnabled() && isClanRosterSyncConfigured()
+			&& clanOwnerForRosterAutoSync;
+		if (!womWant && !clogWant && !rosterWant)
 		{
 			if (sessionPlayerName != null)
 			{
@@ -396,15 +561,16 @@ public class TerpinheimerPlugin extends Plugin
 		}
 		long totalXp = client.getOverallExperience();
 		boolean hadProgress = Math.abs(totalXp - sessionBaselineXp) > WOM_UPDATE_XP_THRESHOLD || levelUpThisSession;
-		boolean shouldPost = sessionPlayerName != null
-			&& !sessionPlayerName.isEmpty()
-			&& (!config.womRuneprofileSyncOnlyAfterProgress() || hadProgress);
 
 		final String nameForWom = sessionPlayerName;
 		levelUpThisSession = false;
 		sessionBaselineXp = totalXp;
 
-		if (!shouldPost)
+		boolean womShould = womWant && nameForWom != null && !nameForWom.isEmpty()
+			&& (!config.womRuneprofileSyncOnlyAfterProgress() || hadProgress);
+		boolean clogShould = clogWant && nameForWom != null && !nameForWom.isEmpty();
+
+		if (!womShould && !clogShould && !rosterWant)
 		{
 			if (sessionPlayerName != null)
 			{
@@ -413,12 +579,19 @@ public class TerpinheimerPlugin extends Plugin
 			return;
 		}
 
+		final List<ClogChronicleTracker.Line> chronicleSnap = clogChronicleTracker.snapshotChronicle();
+
 		clientThread.invokeLater(() ->
 		{
-			final String rpPayload = rpOn ? RuneProfileLogoutPayload.buildJson(client, gson) : null;
+			final String clogJson = clogShould
+				? clogSitePayloadBuilder.buildJson(client, chronicleSnap)
+				: null;
+			final String rosterJson = rosterWant
+				? clanRosterSitePayloadBuilder.buildJson(client)
+				: null;
 			worker.execute(() ->
 			{
-				if (womOn)
+				if (womShould)
 				{
 					try
 					{
@@ -428,19 +601,193 @@ public class TerpinheimerPlugin extends Plugin
 					{
 					}
 				}
-				if (rpPayload != null)
+				if (clogShould && clogJson != null)
 				{
-					try
-					{
-						runeProfileUpdateService.postProfileJson(rpPayload);
-					}
-					catch (IOException ignored)
-					{
-					}
+					clogSiteSyncService.postClogJsonAsync(
+						config.clogSyncApiUrl(),
+						config.clogSyncApiSecret(),
+						clogJson);
+				}
+				if (rosterWant && rosterJson != null)
+				{
+					clogSiteSyncService.postSiteJsonAsync(
+						config.clanRosterSyncApiUrl(),
+						config.clanRosterSyncApiSecret(),
+						rosterJson);
 				}
 				pullAll();
 			});
 		});
+	}
+
+	private void cancelClogXpSyncDebounce()
+	{
+		ScheduledFuture<?> t = clogXpSyncDebounce;
+		if (t != null)
+		{
+			t.cancel(false);
+			clogXpSyncDebounce = null;
+		}
+	}
+
+	private void maybeScheduleClogSiteSyncAfterSkillXp(Skill skill, int xpNow)
+	{
+		if (!config.clogSyncOnLogout() || !isClogSyncConfigured())
+		{
+			return;
+		}
+		if (discordLoginGrace.inLoginGracePeriod())
+		{
+			clogLastSkillXp.put(skill, xpNow);
+			return;
+		}
+		Integer previous = clogLastSkillXp.put(skill, xpNow);
+		if (previous != null && xpNow > previous)
+		{
+			scheduleDebouncedClogSiteSyncFromXpGain();
+		}
+	}
+
+	private void scheduleDebouncedClogSiteSyncFromXpGain()
+	{
+		if (scheduledExecutor == null || worker == null || worker.isShutdown())
+		{
+			return;
+		}
+		cancelClogXpSyncDebounce();
+		clogXpSyncDebounce = scheduledExecutor.schedule(() ->
+		{
+			if (client.getGameState() != GameState.LOGGED_IN)
+			{
+				return;
+			}
+			if (!config.clogSyncOnLogout() || !isClogSyncConfigured())
+			{
+				return;
+			}
+			clientThread.invokeLater(() ->
+			{
+				if (client.getGameState() != GameState.LOGGED_IN || worker == null || worker.isShutdown())
+				{
+					return;
+				}
+				List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
+				String json = clogSitePayloadBuilder.buildJson(client, snap);
+				if (json == null)
+				{
+					return;
+				}
+				worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
+					config.clogSyncApiUrl(),
+					config.clogSyncApiSecret(),
+					json));
+			});
+		}, CLOG_XP_SYNC_DEBOUNCE_SECONDS, TimeUnit.SECONDS);
+	}
+
+	private boolean isClogSyncConfigured()
+	{
+		String u = config.clogSyncApiUrl();
+		String s = config.clogSyncApiSecret();
+		return u != null && u.trim().startsWith("https://")
+			&& s != null && !s.trim().isEmpty();
+	}
+
+	private boolean isClanRosterSyncConfigured()
+	{
+		String u = config.clanRosterSyncApiUrl();
+		String s = config.clanRosterSyncApiSecret();
+		return u != null && u.trim().startsWith("https://")
+			&& s != null && !s.trim().isEmpty();
+	}
+
+	private void cancelClanRosterLoginDelay()
+	{
+		ScheduledFuture<?> t = clanRosterLoginDelayTask;
+		if (t != null)
+		{
+			t.cancel(false);
+			clanRosterLoginDelayTask = null;
+		}
+	}
+
+	private void scheduleClanRosterSyncAfterLogin()
+	{
+		if (scheduledExecutor == null || !config.clanRosterSyncEnabled() || !isClanRosterSyncConfigured())
+		{
+			return;
+		}
+		cancelClanRosterLoginDelay();
+		clanRosterLoginDelayTask = scheduledExecutor.schedule(() ->
+		{
+			clanRosterLoginDelayTask = null;
+			enqueueClanRosterSitePost(true);
+		}, 4, TimeUnit.SECONDS);
+	}
+
+	private void enqueueClanRosterSitePost(boolean requireAutoSyncEnabled)
+	{
+		if (requireAutoSyncEnabled && !config.clanRosterSyncEnabled())
+		{
+			return;
+		}
+		if (!isClanRosterSyncConfigured())
+		{
+			return;
+		}
+		if (worker == null || worker.isShutdown())
+		{
+			if (!requireAutoSyncEnabled)
+			{
+				clientThread.invokeLater(() -> rosterManualSyncChat(
+					"Cannot post clan roster: plugin background worker is not running. Try toggling the plugin off and on."));
+			}
+			return;
+		}
+		final boolean manual = !requireAutoSyncEnabled;
+		clientThread.invokeLater(() ->
+		{
+			if (requireAutoSyncEnabled && !isLocalPlayerJagexClanOwner())
+			{
+				return;
+			}
+			if (worker == null || worker.isShutdown())
+			{
+				if (manual)
+				{
+					rosterManualSyncChat(
+						"Cannot post clan roster: plugin background worker is not running. Try toggling the plugin off and on.");
+				}
+				return;
+			}
+			String json = clanRosterSitePayloadBuilder.buildJson(client);
+			if (json == null)
+			{
+				if (manual)
+				{
+					rosterManualSyncChat(
+						"Cannot post clan roster: Jagex clan data is not loaded. Be logged in, open the clan interface or clan channel, then try again.");
+				}
+				return;
+			}
+			worker.execute(() -> clogSiteSyncService.postSiteJsonAsync(
+				config.clanRosterSyncApiUrl().trim(),
+				config.clanRosterSyncApiSecret(),
+				json,
+				manual));
+		});
+	}
+
+	/** Game chat for manual collection log POST problems (must run on client thread). */
+	private void clogManualSyncChat(String message)
+	{
+		client.addChatMessage(ChatMessageType.CONSOLE, "Terpinheimer", message, "Terpinheimer");
+	}
+
+	/** Game chat for manual roster POST problems (must run on client thread). */
+	private void rosterManualSyncChat(String message)
+	{
+		client.addChatMessage(ChatMessageType.CONSOLE, "Terpinheimer", message, "Terpinheimer");
 	}
 
 	private void scheduleRefresh()
@@ -461,19 +808,54 @@ public class TerpinheimerPlugin extends Plugin
 	}
 
 	/**
-	 * Clan admins (Owner / Administrator / Event Manager title) may persist
-	 * {@link TerpinheimerConfig#announcementsText()}; no other settings use this check.
+	 * Only Owner and Deputy Owner may persist {@link TerpinheimerConfig#announcementsText()}; no other
+	 * settings use this check.
 	 */
 	private boolean canEditAnnouncementsAsClanOfficer()
 	{
-		if (client.getGameState() != GameState.LOGGED_IN)
+		ClanMember member = findLocalPlayerInClanSettings();
+		if (member == null)
 		{
 			return false;
 		}
-		ClanSettings settings = client.getClanSettings();
-		if (settings == null || client.getLocalPlayer() == null)
+		ClanRank rank = member.getRank();
+		return ClanRank.OWNER.equals(rank) || ClanRank.DEPUTY_OWNER.equals(rank);
+	}
+
+	/**
+	 * Whether the logged-in player is the Jagex clan Owner (not Deputy Owner). Must run on the client thread.
+	 */
+	public boolean isLocalPlayerJagexClanOwner()
+	{
+		ClanMember member = findLocalPlayerInClanSettings();
+		if (member == null)
 		{
 			return false;
+		}
+		ClanRank rank = member.getRank();
+		return ClanRank.OWNER.equals(rank);
+	}
+
+	/**
+	 * Same meaning as {@link #isLocalPlayerJagexClanOwner()} for UI that runs on the Swing EDT: value is
+	 * updated each game tick on the client thread (and cleared when not logged in). Safe to call from the panel timer.
+	 */
+	public boolean isLocalPlayerJagexClanOwnerCached()
+	{
+		return clanOwnerForRosterAutoSync;
+	}
+
+	/** @return clan member row for the local player, or {@code null} */
+	private ClanMember findLocalPlayerInClanSettings()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
+		{
+			return null;
+		}
+		ClanSettings settings = client.getClanSettings();
+		if (settings == null)
+		{
+			return null;
 		}
 		String std = Text.standardize(Text.removeTags(client.getLocalPlayer().getName()));
 		ClanMember member = settings.findMember(std);
@@ -492,18 +874,7 @@ public class TerpinheimerPlugin extends Plugin
 				}
 			}
 		}
-		if (member == null)
-		{
-			return false;
-		}
-		ClanRank rank = member.getRank();
-		if (ClanRank.OWNER.equals(rank) || ClanRank.ADMINISTRATOR.equals(rank))
-		{
-			return true;
-		}
-		ClanTitle title = settings.titleForRank(rank);
-		String titleName = title != null ? title.getName() : null;
-		return titleName != null && "Event Manager".equalsIgnoreCase(titleName.trim());
+		return member;
 	}
 
 	private int effectiveWomGroupId()

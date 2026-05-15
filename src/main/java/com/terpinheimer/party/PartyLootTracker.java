@@ -87,10 +87,10 @@ public class PartyLootTracker
 		this.uiRefresh = uiRefresh;
 	}
 
-	/** Terpinheimer sidebar: show Group tab only when configured and in a party passphrase session. */
+	/** Terpinheimer sidebar: show Group tab whenever Party loot is enabled (you can open the log before joining a party). */
 	public boolean isPartyLootTabVisible()
 	{
-		return config.partyLootShare() && partyService.isInParty();
+		return config.partyLootShare();
 	}
 
 	public void syncVisibility()
