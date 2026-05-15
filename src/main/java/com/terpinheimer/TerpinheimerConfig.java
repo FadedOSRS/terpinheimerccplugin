@@ -104,7 +104,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Links",
-		description = "Home shortcuts, clan calendar page & summary API, and live map API base URL ({base}/post). Shared key is under Live clan map.",
+		description = "Home shortcuts, clan calendar page & summary API, live map API base URL ({base}/post), and optional collection log sync POST URL + secret. Live map shared key is under Live clan map.",
 		position = 10,
 		closedByDefault = true
 	)
@@ -147,7 +147,7 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "womUpdateProfileOnLogout",
 		name = "Update WOM profile on logout",
-		description = "When on, Terpinheimer asks Wise Old Man to refresh your stats from the hiscores on logout / world hop (built-in—no WOM hub plugin needed). Turn on \"Sync WOM/RuneProfile only after XP gain\" to limit calls.",
+		description = "When on, Terpinheimer asks Wise Old Man to refresh your stats from the hiscores on logout / world hop (built-in—no WOM hub plugin needed). Turn on \"Sync WOM only after XP gain\" to limit calls.",
 		position = 4,
 		section = SEC_GEN
 	)
@@ -157,22 +157,10 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "runeprofileUpdateOnLogout",
-		name = "Update RuneProfile on logout",
-		description = "When on, Terpinheimer POSTs skills and quests to api.runeprofile.com on logout / world hop (built-in—no RuneProfile plugin needed). Requires a Jagex-linked RuneLite account (account hash). Full collection log on the site may still use the official RuneProfile plugin.",
-		position = 5,
-		section = SEC_GEN
-	)
-	default boolean runeprofileUpdateOnLogout()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "womRuneprofileSyncOnlyAfterProgress",
-		name = "Sync WOM/RuneProfile only after XP gain",
-		description = "When off (default), Wise Old Man and RuneProfile sync every logout or world hop while the options above are on. When on, only sync after 10k+ total XP gained this session or any skill level-up (fewer API calls).",
-		position = 6,
+		name = "Sync WOM only after XP gain",
+		description = "When off (default), the Wise Old Man profile update runs every logout or world hop while \"Update WOM profile on logout\" is on. When on, only after 10k+ total XP gained this session or any skill level-up (fewer API calls).",
+		position = 5,
 		section = SEC_GEN
 	)
 	default boolean womRuneprofileSyncOnlyAfterProgress()
@@ -185,7 +173,7 @@ public interface TerpinheimerConfig extends Config
 		keyName = "sidebarButtonPriority",
 		name = "Sidebar icon position",
 		description = "Sort order for this plugin's icon on the right sidebar. Lower numbers move it up; higher numbers move it down (same rule as RuneLite's other plugins).",
-		position = 7,
+		position = 6,
 		section = SEC_GEN
 	)
 	default int sidebarButtonPriority()
@@ -196,8 +184,8 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "partyLootShare",
 		name = "Party loot (Group tab)",
-		description = "In a RuneLite party (Party plugin + passphrase), broadcast your NPC and PvP loot to party members who also use Terpinheimer. The Group sidebar tab appears only while you are in a party. Same party websocket as Party Panel https://runelite.net/plugin-hub/show/party-panel",
-		position = 8,
+		description = "In a RuneLite party (Party plugin + passphrase), broadcast your NPC and PvP loot to party members who also use Terpinheimer. The Group sidebar tab is shown whenever this is on so you can open the party loot log anytime; sharing still requires being in a party. Same party websocket as Party Panel https://runelite.net/plugin-hub/show/party-panel",
+		position = 7,
 		section = SEC_GEN
 	)
 	default boolean partyLootShare()
@@ -757,6 +745,92 @@ public interface TerpinheimerConfig extends Config
 	default String liveMapApiBaseUrl()
 	{
 		return "https://terpinheimercc.onrender.com";
+	}
+
+	@ConfigItem(
+		keyName = "clogSyncOnLogout",
+		name = "Sync collection log to website",
+		description = "When on (and POST URL + secret below are set), sends collection log varbits, counts, and recent Chronicle chat lines on logout / world hop, and periodically while you gain skill XP (debounced). For an immediate push without logging out, use Home → POST collection log to site. The site matches your character using My profile → RuneScape name (same spelling as in-game), not only Admin → Set RSN.",
+		position = 10,
+		section = SEC_LINKS
+	)
+	default boolean clogSyncOnLogout()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "clogSyncApiUrl",
+		name = "Collection log sync API (POST)",
+		description = "Full HTTPS URL for the collection log sync POST endpoint. TerpinheimerCC uses https://terpinheimercc.com/api/clog/sync (item-level varbits).",
+		position = 11,
+		section = SEC_LINKS
+	)
+	default String clogSyncApiUrl()
+	{
+		return "https://terpinheimercc.com/api/clog/sync";
+	}
+
+	@ConfigItem(
+		keyName = "clogSyncApiSecret",
+		name = "Collection log sync shared secret",
+		description = "For terpinheimercc.com: same value as server RUNELITE_CLOG_SYNC_SECRET (sent in JSON as syncToken). For web session auth, paste the full \"Bearer eyJ…\" value from the site instead.",
+		position = 12,
+		section = SEC_LINKS,
+		secret = true
+	)
+	default String clogSyncApiSecret()
+	{
+		return "TerpinheimerCC";
+	}
+
+	@ConfigItem(
+		keyName = "clogSyncRuneScapeNameOverride",
+		name = "Collection log RuneScape name override",
+		description = "Optional. Leave blank to send your exact in-game name (same spelling and capitals) as JSON displayName — it must match My profile → RuneScape name on the site (that can differ from Admin → Set RSN). Paste here only if you need to force a different string than the client reads from your character.",
+		position = 13,
+		section = SEC_LINKS
+	)
+	default String clogSyncRuneScapeNameOverride()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "clanRosterSyncEnabled",
+		name = "Sync Jagex clan roster to website",
+		description = "When on (and POST URL + secret below are set), automatic roster POSTs run only while logged in as the Jagex clan Owner: after login, on logout/world hop, and on a timer. Other ranks do not run automatic sync (the Owner may still use Home → POST clan roster). When someone disappears from the roster, the next POST includes a leftMembers array with leftAtEpochMs and their last known rank/join so the site can set a leave date.",
+		position = 14,
+		section = SEC_LINKS
+	)
+	default boolean clanRosterSyncEnabled()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "clanRosterSyncApiUrl",
+		name = "Clan roster sync API (POST)",
+		description = "Full HTTPS URL for the roster snapshot POST. Default is the legacy TerpinheimerCC path; the plugin rewrites it to /api/clan/roster/sync when posting. Override if your site uses a different URL.",
+		position = 15,
+		section = SEC_LINKS
+	)
+	default String clanRosterSyncApiUrl()
+	{
+		return "https://terpinheimercc.com/api/runelite/roster-sync";
+	}
+
+	@ConfigItem(
+		keyName = "clanRosterSyncApiSecret",
+		name = "Clan roster sync shared secret",
+		description = "Sent as JSON syncToken (and X-Sync-Token on terpinheimercc.com), same pattern as collection log sync. Default TerpinheimerCC matches the site RuneLite shared secret for this upload.",
+		position = 16,
+		section = SEC_LINKS,
+		secret = true
+	)
+	default String clanRosterSyncApiSecret()
+	{
+		return "TerpinheimerCC";
 	}
 
 	// ---- Clan event attendance ----

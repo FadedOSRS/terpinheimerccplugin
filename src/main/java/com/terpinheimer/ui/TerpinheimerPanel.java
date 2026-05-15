@@ -15,6 +15,7 @@ import java.awt.Container;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
@@ -133,6 +134,9 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private DefaultTableModel homeEventsModel;
 	private JTable homeEventsTable;
+	private JScrollPane homeEventsScroll;
+
+	private JButton homePostClanRosterBtn;
 
 	private Timer tickTimer;
 
@@ -162,7 +166,7 @@ public class TerpinheimerPanel extends PluginPanel
 		tabButtons[3] = FluxUi.tabToggle("Web Events", false);
 		tabButtons[3].setToolTipText("Clan calendar on your website");
 		groupTabButton = FluxUi.tabToggle("Group", false);
-		groupTabButton.setToolTipText("Party loot (RuneLite party). Join a party with the Party plugin.");
+		groupTabButton.setToolTipText("Party loot log (RuneLite party). Tab is always available when Party loot is on; join a party with the Party plugin to share drops.");
 		tabButtons[0].addActionListener(e -> selectTab(0));
 		tabButtons[1].addActionListener(e -> selectTab(1));
 		tabButtons[2].addActionListener(e -> selectTab(2));
@@ -204,6 +208,7 @@ public class TerpinheimerPanel extends PluginPanel
 			fillCompetitionUi(true);
 			fillCompetitionUi(false);
 			tickCountdowns();
+			syncHomeEventsColumnWidths();
 		});
 	}
 
@@ -450,6 +455,7 @@ public class TerpinheimerPanel extends PluginPanel
 		cards.show(cardHost, CARD_ATTENDANCE);
 		revalidate();
 		repaint();
+		syncAttendanceTab();
 	}
 
 	private void refreshTabStyle(JButton b, boolean sel)
@@ -535,9 +541,11 @@ public class TerpinheimerPanel extends PluginPanel
 		homeEventsModel.addRow(new Object[]{"Website", "—"});
 		homeEventsTable = new JTable(homeEventsModel);
 		FluxUi.styleDataTable(homeEventsTable);
+		homeEventsTable.setFillsViewportHeight(false);
 		homeEventsTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
-		applyTwoColWidths(homeEventsTable, FluxUi.contentWidth());
-		homeEventsTable.setPreferredScrollableViewportSize(new Dimension(0, 81));
+		int rowH = homeEventsTable.getRowHeight();
+		int cw = FluxUi.contentWidth();
+		homeEventsTable.setPreferredScrollableViewportSize(new Dimension(cw, rowH * 3));
 		homeEventsTable.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -551,9 +559,20 @@ public class TerpinheimerPanel extends PluginPanel
 			}
 		});
 
+		homeEventsScroll = wrapScroll(homeEventsTable);
+		homeEventsScroll.getViewport().addComponentListener(new ComponentAdapter()
+		{
+			@Override
+			public void componentResized(ComponentEvent e)
+			{
+				syncHomeEventsColumnWidths();
+			}
+		});
+
 		gbc.gridy = 3;
 		gbc.insets = new Insets(0, 0, 6, 0);
-		body.add(wrapScroll(homeEventsTable), gbc);
+		body.add(homeEventsScroll, gbc);
+		SwingUtilities.invokeLater(this::syncHomeEventsColumnWidths);
 
 		gbc.gridy = 4;
 		gbc.insets = new Insets(0, 0, 0, 0);
@@ -589,7 +608,25 @@ public class TerpinheimerPanel extends PluginPanel
 		gbc.insets = new Insets(0, 0, 0, 0);
 		body.add(manual, gbc);
 
+		JButton postCollectionLog = FluxUi.pillButton("POST collection log to site");
+		postCollectionLog.setToolTipText(
+			"Send your collection log snapshot to your website now (same payload as automatic sync). "
+				+ "Jagex’s collection log menu no longer includes a site-update entry; use this or enable Sync on logout.");
+		postCollectionLog.addActionListener(e -> onPostCollectionLogClicked());
 		gbc.gridy = 14;
+		gbc.insets = new Insets(4, 0, 0, 0);
+		body.add(postCollectionLog, gbc);
+
+		JButton postClanRoster = FluxUi.pillButton("POST clan roster to site");
+		postClanRoster.setToolTipText("Only the Jagex clan Owner sees this. POSTs the clan roster to your website (same as automatic sync in plugin settings).");
+		postClanRoster.addActionListener(e -> onUpdateRosterClicked());
+		postClanRoster.setVisible(false);
+		homePostClanRosterBtn = postClanRoster;
+		gbc.gridy = 15;
+		gbc.insets = new Insets(4, 0, 0, 0);
+		body.add(postClanRoster, gbc);
+
+		gbc.gridy = 16;
 		gbc.weighty = 1;
 		gbc.fill = GridBagConstraints.BOTH;
 		body.add(Box.createGlue(), gbc);
@@ -633,21 +670,30 @@ public class TerpinheimerPanel extends PluginPanel
 		e.consume();
 	}
 
-	private static void applyTwoColWidths(JTable t, int cw)
+	private void syncHomeEventsColumnWidths()
 	{
-		TableColumnModel cm = t.getColumnModel();
-		if (cm.getColumnCount() >= 2)
+		if (homeEventsTable == null || homeEventsScroll == null)
 		{
-			int w0 = Math.min(64, Math.max(48, cw / 3));
-			int w1 = Math.max(40, cw - w0 - 6);
-			cm.getColumn(0).setPreferredWidth(w0);
-			cm.getColumn(1).setPreferredWidth(w1);
+			return;
 		}
+		int vw = homeEventsScroll.getViewport().getWidth();
+		if (vw <= 0)
+		{
+			vw = FluxUi.contentWidth();
+		}
+		TableColumnModel cm = homeEventsTable.getColumnModel();
+		if (cm.getColumnCount() < 2)
+		{
+			return;
+		}
+		int usable = Math.max(80, vw - 4);
+		int w0 = Math.max(56, Math.min(100, usable * 30 / 100));
+		int w1 = Math.max(48, usable - w0);
+		cm.getColumn(0).setPreferredWidth(w0);
+		cm.getColumn(1).setPreferredWidth(w1);
+		homeEventsTable.revalidate();
 	}
 
-	/**
-	 * Sizes Rank / Player / XP(KC) so headers are readable and the table spans the viewport width.
-	 */
 	private static void distributeLeaderboardColumns(JTable table, int viewportInnerWidth)
 	{
 		TableColumnModel cm = table.getColumnModel();
@@ -950,7 +996,7 @@ public class TerpinheimerPanel extends PluginPanel
 	}
 
 	/**
-	 * Clan event attendance (Plugin Hub “Clan Event Attendance”–style), embedded in the sidebar; opened from Home only.
+	 * Clan event attendance only; opened from Home → Clan Event tracker.
 	 */
 	private JPanel buildAttendanceTab()
 	{
@@ -962,39 +1008,43 @@ public class TerpinheimerPanel extends PluginPanel
 		attendanceReportArea.setBackground(FluxUi.BG_PANEL);
 		attendanceReportArea.setForeground(FluxUi.TEXT);
 		attendanceReportArea.setBorder(new EmptyBorder(6, 6, 6, 6));
+		attendanceReportArea.setRows(14);
 
 		JScrollPane reportScroll = new JScrollPane(attendanceReportArea);
-		reportScroll.setPreferredSize(new Dimension(0, 200));
 		reportScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 		reportScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
 		reportScroll.setBorder(FluxUi.tableBorder());
 		reportScroll.getViewport().setBackground(FluxUi.BG_PANEL);
 
-		attendanceStartStopBtn.addActionListener(e -> onAttendanceStartStop());
-		attendanceCopyBtn.addActionListener(e -> onAttendanceCopy());
-
-		JPanel buttons = new JPanel(new GridLayout(2, 1, 0, 6));
-		buttons.setOpaque(false);
-		buttons.setBorder(new EmptyBorder(8, 0, 0, 0));
-		buttons.add(attendanceStartStopBtn);
-		buttons.add(attendanceCopyBtn);
-
-		JPanel center = new JPanel(new BorderLayout());
-		center.setOpaque(false);
-		center.add(reportScroll, BorderLayout.CENTER);
-		center.add(buttons, BorderLayout.SOUTH);
-
 		JLabel head = new JLabel("<html><div style='width:" + tw + "px;text-align:center'><b>Clan Event tracker</b></div></html>");
 		head.setForeground(FluxUi.HEADER_GOLD);
 		head.setFont(head.getFont().deriveFont(Font.BOLD, 14f));
-		head.setBorder(new EmptyBorder(0, 0, 4, 0));
+		head.setBorder(new EmptyBorder(0, 0, 8, 0));
 		head.setHorizontalAlignment(SwingConstants.CENTER);
 
-		JPanel inner = new JPanel(new BorderLayout());
+		attendanceStartStopBtn.addActionListener(e -> onAttendanceStartStop());
+		attendanceCopyBtn.addActionListener(e -> onAttendanceCopy());
+
+		JButton backBtn = FluxUi.pillButton("Back");
+		backBtn.addActionListener(e -> selectTab(0));
+
+		JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		btnRow.setOpaque(false);
+		btnRow.add(attendanceStartStopBtn);
+		btnRow.add(attendanceCopyBtn);
+		btnRow.add(backBtn);
+
+		JPanel northStack = new JPanel();
+		northStack.setLayout(new BoxLayout(northStack, BoxLayout.Y_AXIS));
+		northStack.setOpaque(false);
+		northStack.add(head);
+		northStack.add(btnRow);
+
+		JPanel inner = new JPanel(new BorderLayout(0, 8));
 		inner.setBackground(FluxUi.BG);
 		inner.setBorder(new EmptyBorder(4, 8, 4, 8));
-		inner.add(head, BorderLayout.NORTH);
-		inner.add(center, BorderLayout.CENTER);
+		inner.add(northStack, BorderLayout.NORTH);
+		inner.add(reportScroll, BorderLayout.CENTER);
 		return inner;
 	}
 
@@ -1045,6 +1095,43 @@ public class TerpinheimerPanel extends PluginPanel
 			return;
 		}
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(t), null);
+	}
+
+	private void onPostCollectionLogClicked()
+	{
+		if (!plugin.isClogSiteManualSyncReady())
+		{
+			JOptionPane.showMessageDialog(this,
+				"In Terpinheimer plugin settings (Links), set Collection log sync API (POST) to an https:// URL and set the shared secret.",
+				"Collection log sync",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		plugin.requestClogSiteManualSync();
+	}
+
+	private void onUpdateRosterClicked()
+	{
+		if (!plugin.isClanRosterManualSyncReady())
+		{
+			JOptionPane.showMessageDialog(this,
+				"In Terpinheimer plugin settings, set Clan roster sync API (POST) to an https:// URL and set the shared secret.",
+				"Update roster",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		plugin.runOnClientThread(() ->
+		{
+			if (!plugin.isLocalPlayerJagexClanOwner())
+			{
+				SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+					"Only the Jagex clan Owner can POST the roster to the website.",
+					"Update roster",
+					JOptionPane.INFORMATION_MESSAGE));
+				return;
+			}
+			plugin.requestClanRosterSiteSync();
+		});
 	}
 
 	private void updateWebEventsPanel()
@@ -1271,6 +1358,26 @@ public class TerpinheimerPanel extends PluginPanel
 		updateHomeEventTable();
 		updateWebEventsPanel();
 		syncAttendanceTab();
+		syncHomePostClanRosterButtonVisibility();
+	}
+
+	private void syncHomePostClanRosterButtonVisibility()
+	{
+		if (homePostClanRosterBtn == null)
+		{
+			return;
+		}
+		boolean owner = plugin.isLocalPlayerJagexClanOwnerCached();
+		if (homePostClanRosterBtn.isVisible() != owner)
+		{
+			homePostClanRosterBtn.setVisible(owner);
+			Container p = homePostClanRosterBtn.getParent();
+			if (p != null)
+			{
+				p.revalidate();
+				p.repaint();
+			}
+		}
 	}
 
 	private void updateCountdownLabel(WomLeaderboardModels.CompetitionSnapshot s, JLabel lbl)
