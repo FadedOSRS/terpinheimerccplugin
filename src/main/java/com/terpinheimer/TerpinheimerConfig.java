@@ -24,7 +24,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "General",
-		description = "WOM group, refresh interval, announcements, RuneLite sidebar icon.",
+		description = "WOM group, refresh interval, announcements, clan secret (live map, collection log, roster sync), RuneLite sidebar icon.",
 		position = 0,
 		closedByDefault = true
 	)
@@ -32,7 +32,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Live clan map",
-		description = "When enabled, POSTs your position on a schedule. Set the API base URL under Links and the shared key here.",
+		description = "Opt-in only (off by default). When enabled, POSTs your own position to a clan-hosted HTTPS API. Set the base URL under Links and Clan secret under General.",
 		position = 1,
 		closedByDefault = true
 	)
@@ -104,7 +104,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Links",
-		description = "Home shortcuts, clan calendar page & summary API, live map API base URL ({base}/post), and optional collection log sync POST URL + secret. Live map shared key is under Live clan map.",
+		description = "Home shortcuts, clan calendar page & summary API, live map API base URL ({base}/post), and collection log / roster sync POST URLs. Shared auth is General → Clan secret.",
 		position = 10,
 		closedByDefault = true
 	)
@@ -157,13 +157,13 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "womRuneprofileSyncOnlyAfterProgress",
+		keyName = "womSyncOnlyAfterProgress",
 		name = "Sync WOM only after XP gain",
 		description = "When off (default), the Wise Old Man profile update runs every logout or world hop while \"Update WOM profile on logout\" is on. When on, only after 10k+ total XP gained this session or any skill level-up (fewer API calls).",
 		position = 5,
 		section = SEC_GEN
 	)
-	default boolean womRuneprofileSyncOnlyAfterProgress()
+	default boolean womSyncOnlyAfterProgress()
 	{
 		return false;
 	}
@@ -191,6 +191,31 @@ public interface TerpinheimerConfig extends Config
 	default boolean partyLootShare()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "clanSecret",
+		name = "Clan secret",
+		description = "One shared key for live map POSTs (Authorization header), collection log sync (syncToken), and clan roster sync. On terpinheimercc.com use the same value as RUNELITE_CLOG_SYNC_SECRET / your site RuneLite shared secret. For web session auth you may paste a full \"Bearer eyJ…\" JWT here instead.",
+		position = 8,
+		section = SEC_GEN,
+		secret = true
+	)
+	default String clanSecret()
+	{
+		return "";
+	}
+
+	/** @deprecated use {@link #clanSecret()} — kept for call sites that still use the old name. */
+	default String clogSyncApiSecret()
+	{
+		return clanSecret();
+	}
+
+	/** @deprecated use {@link #clanSecret()} — kept for call sites that still use the old name. */
+	default String clanRosterSyncApiSecret()
+	{
+		return clanSecret();
 	}
 
 	// ---- Discord — Webhook ----
@@ -750,11 +775,35 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "clogSyncOnLogout",
 		name = "Sync collection log to website",
-		description = "When on (and POST URL + secret below are set), sends collection log varbits, counts, and recent Chronicle chat lines on logout / world hop, and periodically while you gain skill XP (debounced). For an immediate push without logging out, use Home → POST collection log to site. The site matches your character using My profile → RuneScape name (same spelling as in-game), not only Admin → Set RSN.",
+		description = "When on (and POST URL under Links + Clan secret under General are set), sends collection log varbits, counts, and recent Chronicle chat lines on logout / world hop, and periodically while you gain skill XP (debounced). For an immediate push without logging out, use Home → POST collection log to site. The site matches your character using My profile → RuneScape name (same spelling as in-game), not only Admin → Set RSN.",
 		position = 10,
 		section = SEC_LINKS
 	)
 	default boolean clogSyncOnLogout()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "clogRapidSyncOnNewItem",
+		name = "Rapid sync on new clog item",
+		description = "When on, POST to the clan site ~3 seconds after a new collection log game message (like RuneProfile rapid sync). Requires sync URL + clan secret.",
+		position = 9,
+		section = SEC_LINKS
+	)
+	default boolean clogRapidSyncOnNewItem()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "clogRunSearchOnManualSync",
+		name = "Run in-log Search on manual POST",
+		description = "When you POST collection log to the site, run the in-game collection log Search once (if your log is open) to load all obtained items via client scripts. Turn off if you use RuneProfile and see conflicts.",
+		position = 10,
+		section = SEC_LINKS
+	)
+	default boolean clogRunSearchOnManualSync()
 	{
 		return true;
 	}
@@ -763,25 +812,12 @@ public interface TerpinheimerConfig extends Config
 		keyName = "clogSyncApiUrl",
 		name = "Collection log sync API (POST)",
 		description = "Full HTTPS URL for the collection log sync POST endpoint. TerpinheimerCC uses https://terpinheimercc.com/api/clog/sync (item-level varbits).",
-		position = 11,
+		position = 12,
 		section = SEC_LINKS
 	)
 	default String clogSyncApiUrl()
 	{
 		return "https://terpinheimercc.com/api/clog/sync";
-	}
-
-	@ConfigItem(
-		keyName = "clogSyncApiSecret",
-		name = "Collection log sync shared secret",
-		description = "For terpinheimercc.com: same value as server RUNELITE_CLOG_SYNC_SECRET (sent in JSON as syncToken). For web session auth, paste the full \"Bearer eyJ…\" value from the site instead.",
-		position = 12,
-		section = SEC_LINKS,
-		secret = true
-	)
-	default String clogSyncApiSecret()
-	{
-		return "TerpinheimerCC";
 	}
 
 	@ConfigItem(
@@ -799,8 +835,8 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "clanRosterSyncEnabled",
 		name = "Sync Jagex clan roster to website",
-		description = "When on (and POST URL + secret below are set), automatic roster POSTs run only while logged in as the Jagex clan Owner: after login, on logout/world hop, and on a timer. Other ranks do not run automatic sync (the Owner may still use Home → POST clan roster). When someone disappears from the roster, the next POST includes a leftMembers array with leftAtEpochMs and their last known rank/join so the site can set a leave date.",
-		position = 14,
+		description = "When on (and POST URL under Links + Clan secret under General are set), automatic roster POSTs run only while logged in as the Jagex clan Owner: after login, on logout/world hop, and on a timer. Other ranks do not run automatic sync (the Owner may still use Home → POST clan roster). When someone disappears from the roster, the next POST includes a leftMembers array with leftAtEpochMs and their last known rank/join so the site can set a leave date.",
+		position = 13,
 		section = SEC_LINKS
 	)
 	default boolean clanRosterSyncEnabled()
@@ -812,25 +848,12 @@ public interface TerpinheimerConfig extends Config
 		keyName = "clanRosterSyncApiUrl",
 		name = "Clan roster sync API (POST)",
 		description = "Full HTTPS URL for the roster snapshot POST. Default is the legacy TerpinheimerCC path; the plugin rewrites it to /api/clan/roster/sync when posting. Override if your site uses a different URL.",
-		position = 15,
+		position = 14,
 		section = SEC_LINKS
 	)
 	default String clanRosterSyncApiUrl()
 	{
 		return "https://terpinheimercc.com/api/runelite/roster-sync";
-	}
-
-	@ConfigItem(
-		keyName = "clanRosterSyncApiSecret",
-		name = "Clan roster sync shared secret",
-		description = "Sent as JSON syncToken (and X-Sync-Token on terpinheimercc.com), same pattern as collection log sync. Default TerpinheimerCC matches the site RuneLite shared secret for this upload.",
-		position = 16,
-		section = SEC_LINKS,
-		secret = true
-	)
-	default String clanRosterSyncApiSecret()
-	{
-		return "TerpinheimerCC";
 	}
 
 	// ---- Clan event attendance ----
@@ -916,13 +939,13 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "liveMapEnabled",
 		name = "Enable live map API",
-		description = "When on, periodically POST your position to Links → Live map API base URL ({base}/post) using the shared key below.",
+		description = "When on, periodically POST your position to Links → Live map API base URL ({base}/post) using General → Clan secret.",
 		position = 0,
 		section = SEC_LIVE_MAP
 	)
 	default boolean liveMapEnabled()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -960,18 +983,5 @@ public interface TerpinheimerConfig extends Config
 	default int liveMapIntervalTicks()
 	{
 		return 5;
-	}
-
-	@ConfigItem(
-		keyName = "liveMapApiKey",
-		name = "Live map API shared key",
-		description = "Sent as the Authorization header on live map POSTs (Goblin Scape pattern). Base URL is under Links.",
-		position = 4,
-		section = SEC_LIVE_MAP,
-		secret = true
-	)
-	default String liveMapApiKey()
-	{
-		return "";
 	}
 }

@@ -611,6 +611,7 @@ public class TerpinheimerPanel extends PluginPanel
 		JButton postCollectionLog = FluxUi.pillButton("POST collection log to site");
 		postCollectionLog.setToolTipText(
 			"Send your collection log snapshot to your website now (same payload as automatic sync). "
+				+ "Open your collection log first so the plugin can run Search and export all obtained items, not only the visible page. "
 				+ "Jagex’s collection log menu no longer includes a site-update entry; use this or enable Sync on logout.");
 		postCollectionLog.addActionListener(e -> onPostCollectionLogClicked());
 		gbc.gridy = 14;
@@ -1102,7 +1103,7 @@ public class TerpinheimerPanel extends PluginPanel
 		if (!plugin.isClogSiteManualSyncReady())
 		{
 			JOptionPane.showMessageDialog(this,
-				"In Terpinheimer plugin settings (Links), set Collection log sync API (POST) to an https:// URL and set the shared secret.",
+				"In Terpinheimer plugin settings (Links), set Collection log sync API (POST) to an https:// URL and set Clan secret under General.",
 				"Collection log sync",
 				JOptionPane.INFORMATION_MESSAGE);
 			return;
@@ -1115,7 +1116,7 @@ public class TerpinheimerPanel extends PluginPanel
 		if (!plugin.isClanRosterManualSyncReady())
 		{
 			JOptionPane.showMessageDialog(this,
-				"In Terpinheimer plugin settings, set Clan roster sync API (POST) to an https:// URL and set the shared secret.",
+				"In Terpinheimer plugin settings (Links), set Clan roster sync API (POST) to an https:// URL and set Clan secret under General.",
 				"Update roster",
 				JOptionPane.INFORMATION_MESSAGE);
 			return;

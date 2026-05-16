@@ -23,6 +23,9 @@ import com.terpinheimer.site.ClanRosterSnapshotTracker;
 import com.terpinheimer.site.ClogChronicleTracker;
 import com.terpinheimer.site.ClogSitePayloadBuilder;
 import com.terpinheimer.site.ClogSiteSyncService;
+import com.terpinheimer.site.ClogRapidSyncService;
+import com.terpinheimer.site.CollectionLogObtainedItemsTracker;
+import com.terpinheimer.site.CollectionLogUnlockCapture;
 import com.terpinheimer.wom.WomCompetitionService;
 import com.terpinheimer.wom.WomLeaderboardModels;
 import com.terpinheimer.wom.WomPlayerUpdateService;
@@ -126,6 +129,12 @@ public class TerpinheimerPlugin extends Plugin
 	private PartyLootTracker partyLootTracker;
 	@Inject
 	private ClogChronicleTracker clogChronicleTracker;
+	@Inject
+	private CollectionLogObtainedItemsTracker collectionLogObtainedItemsTracker;
+	@Inject
+	private CollectionLogUnlockCapture collectionLogUnlockCapture;
+	@Inject
+	private ClogRapidSyncService clogRapidSyncService;
 	@Inject
 	private ClogSitePayloadBuilder clogSitePayloadBuilder;
 	@Inject
@@ -271,12 +280,15 @@ public class TerpinheimerPlugin extends Plugin
 				return;
 			}
 			List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
-			String json = clogSitePayloadBuilder.buildJson(client, snap);
-			worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
-				config.clogSyncApiUrl().trim(),
-				config.clogSyncApiSecret(),
-				json,
-				true));
+			collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
+			{
+				String json = clogSitePayloadBuilder.buildJson(client, snap, "manual-update-button-clog");
+				worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
+					config.clogSyncApiUrl().trim(),
+					config.clogSyncApiSecret(),
+					json,
+					true));
+			});
 		});
 	}
 
@@ -305,6 +317,8 @@ public class TerpinheimerPlugin extends Plugin
 		partyLootTracker.start();
 		eventBus.register(partyLootTracker);
 		eventBus.register(clogChronicleTracker);
+		eventBus.register(collectionLogObtainedItemsTracker);
+		eventBus.register(collectionLogUnlockCapture);
 		worker = Executors.newSingleThreadExecutor(r ->
 		{
 			Thread t = new Thread(r, "terpinheimer-fetch");
@@ -319,6 +333,7 @@ public class TerpinheimerPlugin extends Plugin
 		scheduleRefresh();
 		String initialAnnouncements = config.announcementsText();
 		lastAuthorizedAnnouncementsText = initialAnnouncements != null ? initialAnnouncements : "";
+		clogRapidSyncService.bindWorker(worker);
 		worker.execute(this::pullAll);
 		rosterDiffPrevGameState = client.getGameState();
 	}
@@ -335,6 +350,8 @@ public class TerpinheimerPlugin extends Plugin
 		partyLootTracker.stop();
 		partyLootTracker.setUiRefresh(null);
 		eventBus.unregister(clogChronicleTracker);
+		eventBus.unregister(collectionLogObtainedItemsTracker);
+		eventBus.unregister(collectionLogUnlockCapture);
 		eventBus.unregister(liveMapEventHandler);
 		eventBus.unregister(combatAchievementEventHandler);
 		eventBus.unregister(clanCofferDonationEventHandler);
@@ -567,7 +584,7 @@ public class TerpinheimerPlugin extends Plugin
 		sessionBaselineXp = totalXp;
 
 		boolean womShould = womWant && nameForWom != null && !nameForWom.isEmpty()
-			&& (!config.womRuneprofileSyncOnlyAfterProgress() || hadProgress);
+			&& (!config.womSyncOnlyAfterProgress() || hadProgress);
 		boolean clogShould = clogWant && nameForWom != null && !nameForWom.isEmpty();
 
 		if (!womShould && !clogShould && !rosterWant)
@@ -583,40 +600,51 @@ public class TerpinheimerPlugin extends Plugin
 
 		clientThread.invokeLater(() ->
 		{
-			final String clogJson = clogShould
-				? clogSitePayloadBuilder.buildJson(client, chronicleSnap)
-				: null;
-			final String rosterJson = rosterWant
-				? clanRosterSitePayloadBuilder.buildJson(client)
-				: null;
-			worker.execute(() ->
+			Runnable buildAndEnqueue = () ->
 			{
-				if (womShould)
+				final String clogJson = clogShould
+					? clogSitePayloadBuilder.buildJson(client, chronicleSnap, "logout-sync")
+					: null;
+				final String rosterJson = rosterWant
+					? clanRosterSitePayloadBuilder.buildJson(client)
+					: null;
+				worker.execute(() ->
 				{
-					try
+					if (womShould)
 					{
-						womPlayerUpdateService.requestUpdate(Text.standardize(nameForWom));
+						try
+						{
+							womPlayerUpdateService.requestUpdate(Text.standardize(nameForWom));
+						}
+						catch (IOException ignored)
+						{
+						}
 					}
-					catch (IOException ignored)
+					if (clogShould && clogJson != null)
 					{
+						clogSiteSyncService.postClogJsonAsync(
+							config.clogSyncApiUrl(),
+							config.clogSyncApiSecret(),
+							clogJson);
 					}
-				}
-				if (clogShould && clogJson != null)
-				{
-					clogSiteSyncService.postClogJsonAsync(
-						config.clogSyncApiUrl(),
-						config.clogSyncApiSecret(),
-						clogJson);
-				}
-				if (rosterWant && rosterJson != null)
-				{
-					clogSiteSyncService.postSiteJsonAsync(
-						config.clanRosterSyncApiUrl(),
-						config.clanRosterSyncApiSecret(),
-						rosterJson);
-				}
-				pullAll();
-			});
+					if (rosterWant && rosterJson != null)
+					{
+						clogSiteSyncService.postSiteJsonAsync(
+							config.clanRosterSyncApiUrl(),
+							config.clanRosterSyncApiSecret(),
+							rosterJson);
+					}
+					pullAll();
+				});
+			};
+			if (clogShould)
+			{
+				collectionLogObtainedItemsTracker.runBeforeSyncExport(buildAndEnqueue);
+			}
+			else
+			{
+				buildAndEnqueue.run();
+			}
 		});
 	}
 
@@ -672,15 +700,18 @@ public class TerpinheimerPlugin extends Plugin
 					return;
 				}
 				List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
-				String json = clogSitePayloadBuilder.buildJson(client, snap);
-				if (json == null)
+				collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
 				{
-					return;
-				}
-				worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
-					config.clogSyncApiUrl(),
-					config.clogSyncApiSecret(),
-					json));
+					String json = clogSitePayloadBuilder.buildJson(client, snap, "xp-debounce-sync");
+					if (json == null)
+					{
+						return;
+					}
+					worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
+						config.clogSyncApiUrl(),
+						config.clogSyncApiSecret(),
+						json));
+				});
 			});
 		}, CLOG_XP_SYNC_DEBOUNCE_SECONDS, TimeUnit.SECONDS);
 	}
