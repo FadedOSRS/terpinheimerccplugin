@@ -4,8 +4,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -15,52 +13,30 @@ import net.runelite.api.Client;
 import net.runelite.api.VarPlayer;
 import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.util.Text;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
- * JSON body for {@code POST} to the clan website collection-log sync endpoint.
+ * JSON body for {@code POST} to the clan website collection-log sync endpoint (schema v1).
  * <p>
- * Schema {@code schemaVersion} 1:
- * <ul>
- *   <li>{@code displayName} — exact visible logged-in name (tags stripped, trimmed, NBSP → spaces), same
- *       spelling and capitalization as in-game and as **My profile → RuneScape name** on the site
- *       (not the Admin “Set RSN” field unless that is what you use on My profile). Optional
- *       {@code clogSyncRuneScapeNameOverride} replaces this when set.</li>
- *   <li>{@code standardizedDisplayName} / {@code standardized_display_name} — {@link Text#standardize(String)}
- *       of the visible in-game name so the server can match case-insensitively if it supports it.</li>
- *   <li>{@code displayNameFormatted} — omitted when it would duplicate {@code displayName}.</li>
- *   <li>{@code syncedAtEpochMs} — client clock when the snapshot was taken</li>
- *   <li>{@code clogLogged} / {@code clogTotal} — {@link VarPlayer#CLOG_LOGGED} / {@link VarPlayer#CLOG_TOTAL}</li>
- *   <li>{@code chronicle} — array of {@code { "t": epochMs, "text": "..." }} from recent collection log chat lines</li>
- *   <li>{@code collectionVarbits} — sparse map {@code varbitId} (string) → value for non-zero
- *       {@code net.runelite.api.gameval.VarbitID} fields whose names start with {@code COLLECTION_},
- *       excluding UI varbits {@code COLLECTION_LAST_TAB} and {@code COLLECTION_LAST_CATEGORY}.
- *       The site can derive collection slots, pet vault, etc. from this map plus its catalog.</li>
- *   <li>{@code itemIds} — optional deduped OSRS item ids for obtained slots: {@code COLLECTION_ITEM_*} varbits
- *       resolved through {@code net.runelite.api.gameval.ItemID}, plus any entries from
- *       {@code /collection-varbit-to-item-id.json} (invert of the site's {@code collection-log-varbit-map.json}).</li>
- *   <li>{@code syncToken} / {@code sync_token} — when the shared secret is set in plugin config: RuneLite
- *       secret (same as {@code RUNELITE_CLOG_SYNC_SECRET}), or JWT only if you pasted {@code Bearer eyJ…}
- *       (Bearer prefix stripped for the JSON fields). Placed early in the object for strict parsers.</li>
- *   <li>{@code runeliteVersion}, {@code pluginVersion} — diagnostics</li>
- * </ul>
+ * Collection progress uses bundled varbit id lists + varbit→item maps (no Java reflection).
  */
 @Singleton
 public class ClogSitePayloadBuilder
 {
-	private static final Logger log = LoggerFactory.getLogger(ClogSitePayloadBuilder.class);
-	private static final String VARBIT_ID_CLASS = "net.runelite.api.gameval.VarbitID";
-
 	private final Gson gson;
 	private final TerpinheimerConfig config;
+	private final CollectionLogVarbitSnapshot collectionLogVarbitSnapshot;
 	private final CollectionLogItemIdsSupport collectionLogItemIdsSupport;
 
 	@Inject
-	ClogSitePayloadBuilder(Gson gson, TerpinheimerConfig config, CollectionLogItemIdsSupport collectionLogItemIdsSupport)
+	ClogSitePayloadBuilder(
+		Gson gson,
+		TerpinheimerConfig config,
+		CollectionLogVarbitSnapshot collectionLogVarbitSnapshot,
+		CollectionLogItemIdsSupport collectionLogItemIdsSupport)
 	{
 		this.gson = gson;
 		this.config = config;
+		this.collectionLogVarbitSnapshot = collectionLogVarbitSnapshot;
 		this.collectionLogItemIdsSupport = collectionLogItemIdsSupport;
 	}
 
@@ -72,7 +48,7 @@ public class ClogSitePayloadBuilder
 		root.addProperty("syncedAtEpochMs", System.currentTimeMillis());
 		String rl = RuneLiteProperties.getVersion();
 		root.addProperty("runeliteVersion", rl != null ? rl : "unknown");
-		root.addProperty("pluginVersion", "2.0.1");
+		root.addProperty("pluginVersion", "2.0.2");
 
 		addRuneScapeNameFields(root, client);
 
@@ -93,9 +69,10 @@ public class ClogSitePayloadBuilder
 		root.add("chronicle", chronicleArr);
 
 		JsonObject varbits = new JsonObject();
-		Set<Integer> itemIdSet = new LinkedHashSet<>();
-		appendCollectionVarbits(client, varbits, itemIdSet);
+		collectionLogVarbitSnapshot.snapshot(client, varbits);
 		root.add("collectionVarbits", varbits);
+
+		Set<Integer> itemIdSet = new LinkedHashSet<>();
 		collectionLogItemIdsSupport.addItemIdsFromVarbitResource(varbits, itemIdSet);
 		if (!itemIdSet.isEmpty())
 		{
@@ -121,8 +98,6 @@ public class ClogSitePayloadBuilder
 		}
 		else
 		{
-			// Exact visible name (case-sensitive) so it matches My profile when stored as shown in-game.
-			// Do not use Text.standardize here: e.g. "FadedOSRS" must not become "fadedosrs".
 			displayName = visible;
 		}
 		root.addProperty("displayName", displayName);
@@ -139,9 +114,6 @@ public class ClogSitePayloadBuilder
 		}
 	}
 
-	/**
-	 * Visible RuneScape name for the logged-in account — tags stripped, trimmed, NBSP → spaces.
-	 */
 	private static String runescapeDisplayNameForSite(Client client)
 	{
 		if (client.getLocalPlayer() == null)
@@ -153,8 +125,7 @@ public class ClogSitePayloadBuilder
 		{
 			return "";
 		}
-		n = n.trim().replace('\u00A0', ' ');
-		return n;
+		return n.trim().replace('\u00A0', ' ');
 	}
 
 	private void addSyncTokenFields(JsonObject root)
@@ -175,40 +146,5 @@ public class ClogSitePayloadBuilder
 		}
 		root.addProperty("syncToken", token);
 		root.addProperty("sync_token", token);
-	}
-
-	private void appendCollectionVarbits(Client client, JsonObject out, Set<Integer> itemIdSet)
-	{
-		try
-		{
-			Class<?> vb = Class.forName(VARBIT_ID_CLASS);
-			for (Field f : vb.getFields())
-			{
-				if (f.getType() != int.class || !Modifier.isStatic(f.getModifiers()))
-				{
-					continue;
-				}
-				String n = f.getName();
-				if (!n.startsWith("COLLECTION_"))
-				{
-					continue;
-				}
-				if ("COLLECTION_LAST_TAB".equals(n) || "COLLECTION_LAST_CATEGORY".equals(n))
-				{
-					continue;
-				}
-				int varbitId = f.getInt(null);
-				int v = client.getVarbitValue(varbitId);
-				if (v != 0)
-				{
-					out.addProperty(Integer.toString(varbitId), v);
-					collectionLogItemIdsSupport.tryAddItemIdFromCollectionItemVarbit(n, v, itemIdSet);
-				}
-			}
-		}
-		catch (ReflectiveOperationException | LinkageError e)
-		{
-			log.debug("Terpinheimer: collection varbit snapshot skipped: {}", e.toString());
-		}
 	}
 }
