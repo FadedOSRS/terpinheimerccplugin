@@ -7,6 +7,8 @@ import com.terpinheimer.TerpinheimerConfig;
 import java.io.IOException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import okhttp3.MediaType;
@@ -34,40 +36,34 @@ public class WebhookDispatcher
 	private final TerpinheimerConfig config;
 	private final OkHttpClient http;
 	private final Gson gson;
+	private final ScheduledExecutorService scheduledExecutor;
 	private final BlockingQueue<WebhookPayload> queue = new LinkedBlockingQueue<>(256);
-	private volatile Thread worker;
 	private volatile boolean running;
+	private volatile long lastSendEnd;
 	private long lastInvalidUrlWarnMs;
 
 	@Inject
-	WebhookDispatcher(TerpinheimerConfig config, OkHttpClient http, Gson gson)
+	WebhookDispatcher(
+		TerpinheimerConfig config,
+		OkHttpClient http,
+		Gson gson,
+		ScheduledExecutorService scheduledExecutor)
 	{
 		this.config = config;
 		this.http = http;
 		this.gson = gson;
+		this.scheduledExecutor = scheduledExecutor;
 	}
 
 	public void start()
 	{
-		if (running)
-		{
-			return;
-		}
 		running = true;
-		worker = new Thread(this::drainLoop, "terpinheimer-discord-webhook");
-		worker.setDaemon(true);
-		worker.start();
 	}
 
 	public void stop()
 	{
 		running = false;
 		queue.clear();
-		if (worker != null)
-		{
-			worker.interrupt();
-			worker = null;
-		}
 	}
 
 	public void enqueue(WebhookPayload payload)
@@ -86,89 +82,115 @@ public class WebhookDispatcher
 		if (!queue.offer(payload))
 		{
 			log.warn("Terpinheimer Discord: webhook queue is full; dropping a message.");
+			return;
 		}
+		scheduleDrain();
 	}
 
-	private void drainLoop()
+	private void scheduleDrain()
 	{
-		long lastSendEnd = 0L;
-		while (running && !Thread.currentThread().isInterrupted())
+		if (!running)
 		{
-			try
-			{
-				WebhookPayload job = queue.take();
-				long wait = MIN_INTERVAL_MS - (System.currentTimeMillis() - lastSendEnd);
-				if (wait > 0)
-				{
-					Thread.sleep(wait);
-				}
-				sendWithRetries(job);
-				lastSendEnd = System.currentTimeMillis();
-			}
-			catch (InterruptedException e)
-			{
-				Thread.currentThread().interrupt();
-				break;
-			}
-			catch (Throwable t)
-			{
-				log.error("Terpinheimer Discord: worker crashed; continuing", t);
-			}
+			return;
+		}
+		scheduledExecutor.execute(this::drainStep);
+	}
+
+	private void drainStep()
+	{
+		if (!running)
+		{
+			return;
+		}
+		WebhookPayload job = queue.poll();
+		if (job == null)
+		{
+			return;
+		}
+		long wait = MIN_INTERVAL_MS - (System.currentTimeMillis() - lastSendEnd);
+		if (wait > 0)
+		{
+			scheduledExecutor.schedule(() -> sendThenDrain(job), wait, TimeUnit.MILLISECONDS);
+			return;
+		}
+		sendThenDrain(job);
+	}
+
+	private void sendThenDrain(WebhookPayload job)
+	{
+		if (!running)
+		{
+			return;
+		}
+		sendWithRetries(job, 0);
+		lastSendEnd = System.currentTimeMillis();
+		if (!queue.isEmpty())
+		{
+			scheduleDrain();
 		}
 	}
 
-	private void sendWithRetries(WebhookPayload job)
+	private void sendWithRetries(WebhookPayload job, int attempt)
 	{
+		if (!running)
+		{
+			return;
+		}
 		String url = effectiveUrl(job).trim();
-		for (int attempt = 0; attempt < 5; attempt++)
+		try (Response response = executePost(url, job))
 		{
-			try (Response response = executePost(url, job))
+			if (response.isSuccessful())
 			{
-				if (response.isSuccessful())
-				{
-					return;
-				}
-				if (response.code() == 429)
-				{
-					String ra = response.header("Retry-After");
-					int seconds = 2;
-					try
-					{
-						if (ra != null)
-						{
-							seconds = Integer.parseInt(ra);
-						}
-					}
-					catch (NumberFormatException ignored)
-					{
-					}
-					Thread.sleep(Math.min(Math.max(seconds, 1), 60) * 1000L);
-					continue;
-				}
-				if (response.code() >= 500 && attempt < 4)
-				{
-					Thread.sleep(400L * (attempt + 1));
-					continue;
-				}
-				String errBody = readErrorBodySnippet(response);
-				log.warn("Terpinheimer Discord webhook rejected: HTTP {} {}", response.code(), errBody);
 				return;
 			}
-			catch (IOException e)
+			if (response.code() == 429 && attempt < 4)
 			{
-				if (attempt == 4)
-				{
-					log.warn("Terpinheimer Discord webhook I/O error: {}", e.getMessage());
-					return;
-				}
-				sleepBackoff(attempt);
-			}
-			catch (InterruptedException e)
-			{
-				Thread.currentThread().interrupt();
+				long delayMs = retryAfterMs(response);
+				scheduledExecutor.schedule(
+					() -> sendWithRetries(job, attempt + 1), delayMs, TimeUnit.MILLISECONDS);
 				return;
+			}
+			if (response.code() >= 500 && attempt < 4)
+			{
+				scheduledExecutor.schedule(
+					() -> sendWithRetries(job, attempt + 1), backoffMs(attempt), TimeUnit.MILLISECONDS);
+				return;
+			}
+			String errBody = readErrorBodySnippet(response);
+			log.warn("Terpinheimer Discord webhook rejected: HTTP {} {}", response.code(), errBody);
+		}
+		catch (IOException e)
+		{
+			if (attempt >= 4)
+			{
+				log.warn("Terpinheimer Discord webhook I/O error: {}", e.getMessage());
+				return;
+			}
+			scheduledExecutor.schedule(
+				() -> sendWithRetries(job, attempt + 1), backoffMs(attempt), TimeUnit.MILLISECONDS);
+		}
+	}
+
+	private static long retryAfterMs(Response response)
+	{
+		String ra = response.header("Retry-After");
+		int seconds = 2;
+		try
+		{
+			if (ra != null)
+			{
+				seconds = Integer.parseInt(ra);
 			}
 		}
+		catch (NumberFormatException ignored)
+		{
+		}
+		return Math.min(Math.max(seconds, 1), 60) * 1000L;
+	}
+
+	private static long backoffMs(int attempt)
+	{
+		return 400L * (attempt + 1);
 	}
 
 	private String effectiveUrl(WebhookPayload payload)
@@ -179,18 +201,6 @@ public class WebhookDispatcher
 			return override.trim();
 		}
 		return config.webhookUrl();
-	}
-
-	private static void sleepBackoff(int attempt)
-	{
-		try
-		{
-			Thread.sleep(400L * (attempt + 1));
-		}
-		catch (InterruptedException e)
-		{
-			Thread.currentThread().interrupt();
-		}
 	}
 
 	private Response executePost(String url, WebhookPayload job) throws IOException
