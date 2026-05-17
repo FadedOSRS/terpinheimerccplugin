@@ -610,9 +610,8 @@ public class TerpinheimerPanel extends PluginPanel
 
 		JButton postCollectionLog = FluxUi.pillButton("POST collection log to site");
 		postCollectionLog.setToolTipText(
-			"Send your collection log snapshot to your website now (same payload as automatic sync). "
-				+ "Open your collection log first so the plugin can run Search and export all obtained items, not only the visible page. "
-				+ "Jagex’s collection log menu no longer includes a site-update entry; use this or enable Sync on logout.");
+			"Only action that syncs the collection log to your clan site. Terpinheimer does nothing with the log until you press this. "
+				+ "Safe to use alongside RuneProfile (saved items + varbits; no log UI hooks while RuneProfile is on).");
 		postCollectionLog.addActionListener(e -> onPostCollectionLogClicked());
 		gbc.gridy = 14;
 		gbc.insets = new Insets(4, 0, 0, 0);

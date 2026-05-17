@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * RuneProfile-style collection log storage: {@code Map<itemId, quantity>} persisted per Jagex account hash.
+ * In-memory updates during script 4100 must not write config on the client thread (causes log UI freezes).
  */
 @Singleton
 public final class CollectionLogItemStore
@@ -28,8 +29,7 @@ public final class CollectionLogItemStore
 	private final ConfigManager configManager;
 	private final Gson gson;
 	private final Map<Integer, Integer> items = new HashMap<>();
-	private volatile long lastPersistEpochMs;
-	private static final int PERSIST_DEBOUNCE_MS = 4000;
+	private volatile boolean dirty;
 
 	@Inject
 	CollectionLogItemStore(Client client, ConfigManager configManager, Gson gson)
@@ -45,6 +45,7 @@ public final class CollectionLogItemStore
 		synchronized (items)
 		{
 			items.clear();
+			dirty = false;
 			if (hash == 0L)
 			{
 				return;
@@ -79,6 +80,9 @@ public final class CollectionLogItemStore
 		log.debug("Terpinheimer: loaded {} collection log item(s) from disk", items.size());
 	}
 
+	/**
+	 * Updates the in-memory map only. Call {@link #persistNow()} after the log closes or before site sync.
+	 */
 	public void storeItem(int itemId, int quantity)
 	{
 		if (itemId <= 0 || quantity <= 0)
@@ -86,23 +90,27 @@ public final class CollectionLogItemStore
 			return;
 		}
 		int qty = Math.min(65535, quantity);
-		boolean changed;
 		synchronized (items)
 		{
 			Integer prev = items.get(itemId);
 			int merged = prev == null ? qty : Math.max(prev, qty);
-			changed = prev == null || merged != prev;
-			items.put(itemId, merged);
-		}
-		if (changed)
-		{
-			persistForCurrentAccountDebounced();
+			if (prev == null || merged != prev)
+			{
+				items.put(itemId, merged);
+				dirty = true;
+			}
 		}
 	}
 
+	/** Writes the in-memory map to RuneLite config (client thread). */
 	public void persistNow()
 	{
+		if (!dirty)
+		{
+			return;
+		}
 		persistForCurrentAccount();
+		dirty = false;
 	}
 
 	public int size()
@@ -131,17 +139,6 @@ public final class CollectionLogItemStore
 		{
 			root.add("items", map);
 		}
-	}
-
-	private void persistForCurrentAccountDebounced()
-	{
-		long now = System.currentTimeMillis();
-		if (now - lastPersistEpochMs < PERSIST_DEBOUNCE_MS)
-		{
-			return;
-		}
-		lastPersistEpochMs = now;
-		persistForCurrentAccount();
 	}
 
 	private void persistForCurrentAccount()

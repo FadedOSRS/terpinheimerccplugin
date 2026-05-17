@@ -70,7 +70,7 @@ public class LiveMapEventHandler
 		tickCounter = 0;
 
 		String base = config.liveMapApiBaseUrl();
-		String key = config.liveMapApiKey();
+		String key = config.clanSecret();
 		String postUrl = LiveMapService.buildPostUrl(base);
 		if (postUrl == null || !isValidHttpsBase(base) || key == null || key.trim().isEmpty())
 		{

@@ -1,17 +1,15 @@
 package com.terpinheimer.discord;
 
-import java.awt.Canvas;
-import java.awt.Rectangle;
-import java.awt.Robot;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import javax.imageio.ImageIO;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import net.runelite.api.BufferProvider;
 import net.runelite.api.Client;
 
 /**
- * Captures the client canvas from the screen (same idea as many RuneLite screenshot flows).
+ * Captures the client framebuffer for Discord embeds (reads the game buffer only; no screen automation).
  */
 @Singleton
 public class ClientScreenshot
@@ -27,7 +25,7 @@ public class ClientScreenshot
 	}
 
 	/**
-	 * Must run on the AWT event thread.
+	 * Must run on the client thread.
 	 */
 	public byte[] capturePngOrNull()
 	{
@@ -35,15 +33,26 @@ public class ClientScreenshot
 		{
 			return null;
 		}
-		Canvas canvas = client.getCanvas();
-		if (canvas == null || !canvas.isShowing())
+		BufferProvider bufferProvider = client.getBufferProvider();
+		if (bufferProvider == null)
+		{
+			return null;
+		}
+		int width = bufferProvider.getWidth();
+		int height = bufferProvider.getHeight();
+		if (width <= 0 || height <= 0)
+		{
+			return null;
+		}
+		int[] pixels = bufferProvider.getPixels();
+		if (pixels == null || pixels.length < width * height)
 		{
 			return null;
 		}
 		try
 		{
-			Rectangle bounds = new Rectangle(canvas.getLocationOnScreen(), canvas.getSize());
-			BufferedImage shot = new Robot().createScreenCapture(bounds);
+			BufferedImage shot = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+			shot.setRGB(0, 0, width, height, pixels, 0, width);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
 			ImageIO.write(shot, "png", baos);
 			return baos.toByteArray();

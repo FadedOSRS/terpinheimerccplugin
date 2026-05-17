@@ -2,10 +2,9 @@ package com.terpinheimer.wom;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
-import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
-import java.lang.reflect.Type;
 import java.time.Instant;
+import java.util.Arrays;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -25,8 +24,6 @@ import net.runelite.client.RuneLiteProperties;
 public class WomCompetitionService
 {
 	private static final String API = "https://api.wiseoldman.net/v2";
-	private static final Type SUMMARY_LIST = new TypeToken<List<WomJson.CompetitionSummary>>() { }.getType();
-
 	private final OkHttpClient http;
 	private final Gson gson;
 
@@ -219,7 +216,12 @@ public class WomCompetitionService
 			}
 			try
 			{
-				return gson.fromJson(body.charStream(), SUMMARY_LIST);
+				WomJson.CompetitionSummary[] arr = gson.fromJson(body.charStream(), WomJson.CompetitionSummary[].class);
+				if (arr == null)
+				{
+					return null;
+				}
+				return Arrays.asList(arr);
 			}
 			catch (JsonSyntaxException e)
 			{

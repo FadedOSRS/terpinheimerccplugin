@@ -773,11 +773,25 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "clogManualSyncOnly",
+		name = "Manual collection log sync only",
+		description = "Always on: collection log site sync only runs from Home → POST collection log. Terpinheimer never hooks the log UI at startup.",
+		position = 8,
+		section = SEC_LINKS,
+		hidden = true
+	)
+	default boolean clogManualSyncOnly()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "clogSyncOnLogout",
 		name = "Sync collection log to website",
-		description = "When on (and POST URL under Links + Clan secret under General are set), sends collection log varbits, counts, and recent Chronicle chat lines on logout / world hop, and periodically while you gain skill XP (debounced). For an immediate push without logging out, use Home → POST collection log to site. The site matches your character using My profile → RuneScape name (same spelling as in-game), not only Admin → Set RSN.",
+		description = "Disabled — use Home → POST collection log to site.",
 		position = 10,
-		section = SEC_LINKS
+		section = SEC_LINKS,
+		hidden = true
 	)
 	default boolean clogSyncOnLogout()
 	{
@@ -787,25 +801,27 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "clogRapidSyncOnNewItem",
 		name = "Rapid sync on new clog item",
-		description = "When on, POST to the clan site ~3 seconds after a new collection log game message (like RuneProfile rapid sync). Requires sync URL + clan secret.",
+		description = "Disabled — use Home → POST collection log to site.",
 		position = 9,
-		section = SEC_LINKS
+		section = SEC_LINKS,
+		hidden = true
 	)
 	default boolean clogRapidSyncOnNewItem()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
 		keyName = "clogRunSearchOnManualSync",
 		name = "Run in-log Search on manual POST",
-		description = "When you POST collection log to the site, run the in-game collection log Search once (if your log is open) to load all obtained items via client scripts. Turn off if you use RuneProfile and see conflicts.",
+		description = "Deprecated — no longer used. Terpinheimer does not run in-game collection log Search (avoids UI glitches). Sync uses varbits, chronicle chat, and items captured from new-unlock messages.",
 		position = 10,
-		section = SEC_LINKS
+		section = SEC_LINKS,
+		hidden = true
 	)
 	default boolean clogRunSearchOnManualSync()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(

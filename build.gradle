@@ -36,6 +36,8 @@ tasks.withType(JavaCompile).configureEach {
     options.release.set(11)
 }
 
+def sideloadedPluginsDir = file("${System.getProperty('user.home')}/.runelite/sideloaded-plugins")
+
 tasks.register('run', JavaExec) {
     group = 'application'
     description = 'Run RuneLite with Terpinheimer (builtin dev)'
@@ -44,6 +46,34 @@ tasks.register('run', JavaExec) {
     mainClass = devMainClass
     jvmArgs '-ea'
     args '--developer-mode', '--debug'
+
+    // A sideloaded terpinheimer*.jar plus loadBuiltin() registers Terpinheimer twice; RuneLite then
+    // treats them as conflicting plugins and the toggle/sidebar break. Quarantine sideloads for dev only.
+    ext.quarantinedSideloads = []
+    doFirst {
+        ext.quarantinedSideloads.clear()
+        if (!sideloadedPluginsDir.isDirectory()) {
+            return
+        }
+        sideloadedPluginsDir.eachFile { File jar ->
+            String n = jar.name.toLowerCase(Locale.ROOT)
+            if (jar.isFile() && n.endsWith('.jar') && n.contains('terpinheimer')) {
+                File quarantine = new File(sideloadedPluginsDir, jar.name + '.dev-quarantine')
+                if (jar.renameTo(quarantine)) {
+                    ext.quarantinedSideloads << [name: jar.name, file: quarantine]
+                    logger.lifecycle('Dev run: quarantined sideload {} (avoids duplicate Terpinheimer).', jar.name)
+                }
+            }
+        }
+    }
+    doLast {
+        ext.quarantinedSideloads.each { entry ->
+            File restore = new File(sideloadedPluginsDir, entry.name as String)
+            if (entry.file.renameTo(restore)) {
+                logger.lifecycle('Dev run: restored sideload {}.', entry.name)
+            }
+        }
+    }
 }
 
 tasks.register('shadowJar', Jar) {

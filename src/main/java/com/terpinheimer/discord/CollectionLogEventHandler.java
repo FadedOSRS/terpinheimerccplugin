@@ -2,6 +2,8 @@ package com.terpinheimer.discord;
 
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
+import com.terpinheimer.site.CollectionLogChatFilters;
+import com.terpinheimer.site.CollectionLogUiState;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -56,6 +58,7 @@ public class CollectionLogEventHandler
 	private final ClientThread clientThread;
 	private final ClientScreenshot screenshot;
 	private final ScheduledExecutorService scheduledExecutor;
+	private final CollectionLogUiState collectionLogUiState;
 
 	private final ArrayDeque<String> recentPlainChat = new ArrayDeque<>();
 	private volatile RecentLoot recentLoot;
@@ -83,7 +86,8 @@ public class CollectionLogEventHandler
 		WebhookDispatcher dispatcher,
 		ClientThread clientThread,
 		ClientScreenshot screenshot,
-		ScheduledExecutorService scheduledExecutor)
+		ScheduledExecutorService scheduledExecutor,
+		CollectionLogUiState collectionLogUiState)
 	{
 		this.client = client;
 		this.config = config;
@@ -93,6 +97,7 @@ public class CollectionLogEventHandler
 		this.clientThread = clientThread;
 		this.screenshot = screenshot;
 		this.scheduledExecutor = scheduledExecutor;
+		this.collectionLogUiState = collectionLogUiState;
 	}
 
 	@Subscribe
@@ -179,7 +184,8 @@ public class CollectionLogEventHandler
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
-		if (!config.sendCollectionLog() || client.getGameState() != GameState.LOGGED_IN)
+		if (!config.sendCollectionLog() || client.getGameState() != GameState.LOGGED_IN
+			|| collectionLogUiState.isCollectionLogOpen(client))
 		{
 			return;
 		}
@@ -188,12 +194,7 @@ public class CollectionLogEventHandler
 		{
 			appendChatLine(plain);
 		}
-		if (!DiscordChatFilters.allows(event.getType()))
-		{
-			return;
-		}
-		String low = plain.toLowerCase();
-		if (!low.contains("collection log") && !low.contains("col log") && !low.contains("new item"))
+		if (!DiscordChatFilters.allows(event.getType()) || !CollectionLogChatFilters.isUnlockNotification(plain))
 		{
 			return;
 		}

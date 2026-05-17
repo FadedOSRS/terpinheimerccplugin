@@ -13,6 +13,7 @@ import net.runelite.api.clan.ClanRank;
 import net.runelite.api.clan.ClanSettings;
 import net.runelite.api.clan.ClanTitle;
 import net.runelite.client.RuneLiteProperties;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.util.Text;
 
 /**
@@ -32,15 +33,23 @@ import net.runelite.client.util.Text;
 @Singleton
 public class ClanRosterSitePayloadBuilder
 {
+	private static final String CONFIG_GROUP = "terpinheimer";
+
 	private final Gson gson;
 	private final TerpinheimerConfig config;
+	private final ConfigManager configManager;
 	private final ClanRosterSnapshotTracker rosterSnapshotTracker;
 
 	@Inject
-	ClanRosterSitePayloadBuilder(Gson gson, TerpinheimerConfig config, ClanRosterSnapshotTracker rosterSnapshotTracker)
+	ClanRosterSitePayloadBuilder(
+		Gson gson,
+		TerpinheimerConfig config,
+		ConfigManager configManager,
+		ClanRosterSnapshotTracker rosterSnapshotTracker)
 	{
 		this.gson = gson;
 		this.config = config;
+		this.configManager = configManager;
 		this.rosterSnapshotTracker = rosterSnapshotTracker;
 	}
 
@@ -185,21 +194,43 @@ public class ClanRosterSitePayloadBuilder
 
 	private void addSyncTokenFields(JsonObject root)
 	{
-		String st = config.clanRosterSyncApiSecret();
-		if (st == null || st.trim().isEmpty())
-		{
-			return;
-		}
-		String token = st.trim();
-		if (token.regionMatches(true, 0, "Bearer ", 0, 7))
-		{
-			token = token.substring(7).trim();
-		}
+		String token = resolveClanSecret();
 		if (token.isEmpty())
 		{
 			return;
 		}
 		root.addProperty("syncToken", token);
 		root.addProperty("sync_token", token);
+	}
+
+	private String resolveClanSecret()
+	{
+		String st = configManager.getConfiguration(CONFIG_GROUP, "clanSecret");
+		if (st == null || st.trim().isEmpty())
+		{
+			st = config.clanSecret();
+		}
+		if (st == null || st.trim().isEmpty())
+		{
+			for (String legacyKey : new String[] {"clogSyncApiSecret", "clanRosterSyncApiSecret", "liveMapApiKey"})
+			{
+				String legacy = configManager.getConfiguration(CONFIG_GROUP, legacyKey);
+				if (legacy != null && !legacy.trim().isEmpty())
+				{
+					st = legacy;
+					break;
+				}
+			}
+		}
+		if (st == null)
+		{
+			return "";
+		}
+		String token = st.trim();
+		if (token.regionMatches(true, 0, "Bearer ", 0, 7))
+		{
+			token = token.substring(7).trim();
+		}
+		return token;
 	}
 }

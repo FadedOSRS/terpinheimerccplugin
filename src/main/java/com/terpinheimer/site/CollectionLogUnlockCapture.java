@@ -9,6 +9,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.http.api.item.ItemPrice;
@@ -29,24 +30,37 @@ public final class CollectionLogUnlockCapture
 	private final Client client;
 	private final ItemManager itemManager;
 	private final CollectionLogItemStore collectionLogItemStore;
-	private final ClogRapidSyncService clogRapidSyncService;
+	private final RuneProfilePresence runeProfilePresence;
 
 	@Inject
 	CollectionLogUnlockCapture(
 		Client client,
 		ItemManager itemManager,
 		CollectionLogItemStore collectionLogItemStore,
-		ClogRapidSyncService clogRapidSyncService)
+		RuneProfilePresence runeProfilePresence)
 	{
 		this.client = client;
 		this.itemManager = itemManager;
 		this.collectionLogItemStore = collectionLogItemStore;
-		this.clogRapidSyncService = clogRapidSyncService;
+		this.runeProfilePresence = runeProfilePresence;
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOGGED_IN)
+		{
+			collectionLogItemStore.reloadForCurrentAccount();
+		}
 	}
 
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
+		if (runeProfilePresence.isEnabled())
+		{
+			return;
+		}
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
 			return;
@@ -77,7 +91,7 @@ public final class CollectionLogUnlockCapture
 			return;
 		}
 		collectionLogItemStore.storeItem(itemId, 1);
-		clogRapidSyncService.scheduleRapidSync("collection-notification");
+		collectionLogItemStore.persistNow();
 	}
 
 	private int resolveItemId(String itemName)

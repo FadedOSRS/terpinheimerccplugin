@@ -3,7 +3,6 @@ package com.terpinheimer.site;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.ChatMessageType;
@@ -69,8 +68,7 @@ public class ClogChronicleTracker
 		{
 			return;
 		}
-		String low = plain.toLowerCase(Locale.ROOT);
-		if (!low.contains("collection log") && !low.contains("col log") && !low.contains("new item"))
+		if (!CollectionLogChatFilters.isUnlockNotification(plain))
 		{
 			return;
 		}

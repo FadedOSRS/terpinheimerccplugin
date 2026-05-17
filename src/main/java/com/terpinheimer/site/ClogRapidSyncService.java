@@ -26,9 +26,12 @@ public final class ClogRapidSyncService
 	private final ClogSitePayloadBuilder clogSitePayloadBuilder;
 	private final ClogSiteSyncService clogSiteSyncService;
 	private final ScheduledExecutorService scheduledExecutor;
+	private final CollectionLogUiState collectionLogUiState;
 
 	private volatile ExecutorService worker;
 	private volatile ScheduledFuture<?> rapidSyncTask;
+
+	private static final int RAPID_SYNC_RETRY_SECONDS = 8;
 
 	@Inject
 	ClogRapidSyncService(
@@ -38,7 +41,8 @@ public final class ClogRapidSyncService
 		CollectionLogObtainedItemsTracker collectionLogObtainedItemsTracker,
 		ClogSitePayloadBuilder clogSitePayloadBuilder,
 		ClogSiteSyncService clogSiteSyncService,
-		ScheduledExecutorService scheduledExecutor)
+		ScheduledExecutorService scheduledExecutor,
+		CollectionLogUiState collectionLogUiState)
 	{
 		this.client = client;
 		this.config = config;
@@ -47,6 +51,7 @@ public final class ClogRapidSyncService
 		this.clogSitePayloadBuilder = clogSitePayloadBuilder;
 		this.clogSiteSyncService = clogSiteSyncService;
 		this.scheduledExecutor = scheduledExecutor;
+		this.collectionLogUiState = collectionLogUiState;
 	}
 
 	public void bindWorker(ExecutorService worker)
@@ -54,49 +59,8 @@ public final class ClogRapidSyncService
 		this.worker = worker;
 	}
 
+	/** No-op: collection log site sync is manual-only (sidebar POST button). */
 	public void scheduleRapidSync(String eventSource)
 	{
-		if (!config.clogRapidSyncOnNewItem() || !isClogSyncConfigured())
-		{
-			return;
-		}
-		ExecutorService w = worker;
-		if (w == null || w.isShutdown())
-		{
-			return;
-		}
-		ScheduledFuture<?> prev = rapidSyncTask;
-		if (prev != null)
-		{
-			prev.cancel(false);
-		}
-		rapidSyncTask = scheduledExecutor.schedule(() ->
-		{
-			if (client.getGameState() != GameState.LOGGED_IN)
-			{
-				return;
-			}
-			List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
-			collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
-			{
-				String json = clogSitePayloadBuilder.buildJson(client, snap, eventSource);
-				if (json == null || json.isEmpty())
-				{
-					return;
-				}
-				w.execute(() -> clogSiteSyncService.postClogJsonAsync(
-					config.clogSyncApiUrl().trim(),
-					config.clogSyncApiSecret(),
-					json));
-			});
-		}, RAPID_SYNC_DELAY_SECONDS, TimeUnit.SECONDS);
-	}
-
-	private boolean isClogSyncConfigured()
-	{
-		String u = config.clogSyncApiUrl();
-		String s = config.clogSyncApiSecret();
-		return u != null && u.trim().startsWith("https://")
-			&& s != null && !s.trim().isEmpty();
 	}
 }

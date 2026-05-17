@@ -21,10 +21,15 @@ import com.terpinheimer.site.ClanCalendarSummaryService.WebEventRow;
 import com.terpinheimer.site.ClanRosterSitePayloadBuilder;
 import com.terpinheimer.site.ClanRosterSnapshotTracker;
 import com.terpinheimer.site.ClogChronicleTracker;
+import com.terpinheimer.site.ClogCaptureLifecycle;
+import com.terpinheimer.site.RuneProfilePresence;
 import com.terpinheimer.site.ClogSitePayloadBuilder;
 import com.terpinheimer.site.ClogSiteSyncService;
 import com.terpinheimer.site.ClogRapidSyncService;
+import com.terpinheimer.site.CollectionLogUiState;
+import com.terpinheimer.site.CollectionLogItemStore;
 import com.terpinheimer.site.CollectionLogObtainedItemsTracker;
+import com.terpinheimer.site.CollectionLogScriptCapture;
 import com.terpinheimer.site.CollectionLogUnlockCapture;
 import com.terpinheimer.wom.WomCompetitionService;
 import com.terpinheimer.wom.WomLeaderboardModels;
@@ -60,6 +65,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.Text;
@@ -74,6 +80,7 @@ public class TerpinheimerPlugin extends Plugin
 	private static final int WOM_UPDATE_XP_THRESHOLD = 10_000;
 	/** Batch rapid XP ticks into one site POST. */
 	private static final int CLOG_XP_SYNC_DEBOUNCE_SECONDS = 15;
+	private static final int CLOG_XP_SYNC_RETRY_SECONDS = 10;
 	/** ~45 minutes between automatic roster snapshots while logged in (600 ticks/min at normal game rate). */
 	private static final int CLAN_ROSTER_PERIODIC_TICKS = 4_500;
 	/** When General → Wise Old Man group ID is 0, use this group (legacy profiles often still store 0). */
@@ -132,7 +139,11 @@ public class TerpinheimerPlugin extends Plugin
 	@Inject
 	private CollectionLogObtainedItemsTracker collectionLogObtainedItemsTracker;
 	@Inject
+	private CollectionLogItemStore collectionLogItemStore;
+	@Inject
 	private CollectionLogUnlockCapture collectionLogUnlockCapture;
+	@Inject
+	private CollectionLogScriptCapture collectionLogScriptCapture;
 	@Inject
 	private ClogRapidSyncService clogRapidSyncService;
 	@Inject
@@ -143,6 +154,16 @@ public class TerpinheimerPlugin extends Plugin
 	private ClanRosterSitePayloadBuilder clanRosterSitePayloadBuilder;
 	@Inject
 	private ClanRosterSnapshotTracker clanRosterSnapshotTracker;
+	@Inject
+	private CollectionLogUiState collectionLogUiState;
+	@Inject
+	private ClogCaptureLifecycle clogCaptureLifecycle;
+	@Inject
+	private RuneProfilePresence runeProfilePresence;
+	@Inject
+	private PluginManager pluginManager;
+
+	private boolean runeProfileClogConflictWarned;
 
 	private String sessionPlayerName;
 	private long sessionBaselineXp;
@@ -184,6 +205,76 @@ public class TerpinheimerPlugin extends Plugin
 	TerpinheimerConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(TerpinheimerConfig.class);
+	}
+
+	private static final String CONFIG_GROUP = "terpinheimer";
+
+	/** Copies legacy per-feature secrets into {@link TerpinheimerConfig#clanSecret()} when empty. */
+	private void warnIfDuplicateTerpinheimerLoaded()
+	{
+		long count = pluginManager.getPlugins().stream()
+			.filter(p -> p.getClass() == TerpinheimerPlugin.class)
+			.count();
+		if (count <= 1)
+		{
+			return;
+		}
+		clientThread.invokeLater(() -> client.addChatMessage(
+			ChatMessageType.CONSOLE,
+			"Terpinheimer",
+			"Terpinheimer is loaded " + count + " times — remove Plugin Hub / sideloaded copies or only one will work.",
+			"Terpinheimer"));
+	}
+
+	private void scheduleClogSiteSyncFromXpWhenSafe()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN || worker == null || worker.isShutdown())
+		{
+			return;
+		}
+		if (!isAutomaticClogSiteSyncEnabled())
+		{
+			return;
+		}
+		if (collectionLogUiState.isCollectionLogOpen(client))
+		{
+			clogXpSyncDebounce = scheduledExecutor.schedule(
+				() -> clientThread.invokeLater(this::scheduleClogSiteSyncFromXpWhenSafe),
+				CLOG_XP_SYNC_RETRY_SECONDS,
+				TimeUnit.SECONDS);
+			return;
+		}
+		List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
+		collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
+		{
+			String json = clogSitePayloadBuilder.buildJson(client, snap, "xp-debounce-sync");
+			if (json == null)
+			{
+				return;
+			}
+			worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
+				config.clogSyncApiUrl(),
+				resolveClanSecret(),
+				json));
+		});
+	}
+
+	private void migrateLegacyClanSecretIfNeeded()
+	{
+		String current = configManager.getConfiguration(CONFIG_GROUP, "clanSecret");
+		if (current != null && !current.trim().isEmpty())
+		{
+			return;
+		}
+		for (String legacyKey : new String[] {"clogSyncApiSecret", "clanRosterSyncApiSecret", "liveMapApiKey"})
+		{
+			String legacy = configManager.getConfiguration(CONFIG_GROUP, legacyKey);
+			if (legacy != null && !legacy.trim().isEmpty())
+			{
+				configManager.setConfiguration(CONFIG_GROUP, "clanSecret", legacy.trim());
+				return;
+			}
+		}
 	}
 
 	public WomLeaderboardModels.CompetitionSnapshot getSotwSnapshot()
@@ -279,15 +370,19 @@ public class TerpinheimerPlugin extends Plugin
 				clogManualSyncChat("Cannot sync collection log: log in first.");
 				return;
 			}
-			List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
-			collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
+			clogCaptureLifecycle.runDuringManualPost(() ->
 			{
-				String json = clogSitePayloadBuilder.buildJson(client, snap, "manual-update-button-clog");
-				worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
-					config.clogSyncApiUrl().trim(),
-					config.clogSyncApiSecret(),
-					json,
-					true));
+				collectionLogItemStore.reloadForCurrentAccount();
+				List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
+				String json = clogSitePayloadBuilder.buildJson(client, snap, "manual-sync");
+				if (json == null || json.isEmpty())
+				{
+					clogManualSyncChat("Collection log sync: could not build payload (log in and try again).");
+					return;
+				}
+				String url = config.clogSyncApiUrl().trim();
+				String secret = resolveClanSecret();
+				worker.execute(() -> clogSiteSyncService.postClogJsonAsync(url, secret, json, true));
 			});
 		});
 	}
@@ -300,6 +395,8 @@ public class TerpinheimerPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
+		migrateLegacyClanSecretIfNeeded();
+		warnIfDuplicateTerpinheimerLoaded();
 		eventBus.register(this);
 		webhookDispatcher.start();
 		eventBus.register(discordLoginGrace);
@@ -314,11 +411,11 @@ public class TerpinheimerPlugin extends Plugin
 		eventBus.register(clanCofferDonationEventHandler);
 		eventBus.register(liveMapEventHandler);
 		eventBus.register(clanAttendanceTracker);
+		eventBus.register(collectionLogUnlockCapture);
+		collectionLogItemStore.reloadForCurrentAccount();
 		partyLootTracker.start();
 		eventBus.register(partyLootTracker);
-		eventBus.register(clogChronicleTracker);
-		eventBus.register(collectionLogObtainedItemsTracker);
-		eventBus.register(collectionLogUnlockCapture);
+		maybeWarnRuneProfileClogConflict();
 		worker = Executors.newSingleThreadExecutor(r ->
 		{
 			Thread t = new Thread(r, "terpinheimer-fetch");
@@ -343,15 +440,14 @@ public class TerpinheimerPlugin extends Plugin
 	{
 		cancelClogXpSyncDebounce();
 		cancelClanRosterLoginDelay();
+		clogCaptureLifecycle.unregisterAll();
 		clanRosterSnapshotTracker.reset();
 		cancelRefresh();
 		eventBus.unregister(clanAttendanceTracker);
+		eventBus.unregister(collectionLogUnlockCapture);
 		eventBus.unregister(partyLootTracker);
 		partyLootTracker.stop();
 		partyLootTracker.setUiRefresh(null);
-		eventBus.unregister(clogChronicleTracker);
-		eventBus.unregister(collectionLogObtainedItemsTracker);
-		eventBus.unregister(collectionLogUnlockCapture);
 		eventBus.unregister(liveMapEventHandler);
 		eventBus.unregister(combatAchievementEventHandler);
 		eventBus.unregister(clanCofferDonationEventHandler);
@@ -414,7 +510,7 @@ public class TerpinheimerPlugin extends Plugin
 			requestFullRefresh();
 		}
 			if ("clanRosterSyncEnabled".equals(ev.getKey()) || "clanRosterSyncApiUrl".equals(ev.getKey())
-				|| "clanRosterSyncApiSecret".equals(ev.getKey()))
+				|| "clanSecret".equals(ev.getKey()) || "clanRosterSyncApiSecret".equals(ev.getKey()))
 			{
 				if (client.getGameState() == GameState.LOGGED_IN
 					&& config.clanRosterSyncEnabled() && isClanRosterSyncConfigured()
@@ -466,6 +562,7 @@ public class TerpinheimerPlugin extends Plugin
 		switch (state)
 		{
 			case LOGGED_IN:
+				collectionLogItemStore.reloadForCurrentAccount();
 				if (prev != GameState.HOPPING)
 				{
 					clanRosterSnapshotTracker.reset();
@@ -565,7 +662,7 @@ public class TerpinheimerPlugin extends Plugin
 	private void onSessionEndExternalSync()
 	{
 		boolean womWant = config.womUpdateProfileOnLogout();
-		boolean clogWant = config.clogSyncOnLogout() && isClogSyncConfigured();
+		boolean clogWant = isAutomaticClogSiteSyncEnabled();
 		boolean rosterWant = config.clanRosterSyncEnabled() && isClanRosterSyncConfigured()
 			&& clanOwnerForRosterAutoSync;
 		if (!womWant && !clogWant && !rosterWant)
@@ -600,9 +697,11 @@ public class TerpinheimerPlugin extends Plugin
 
 		clientThread.invokeLater(() ->
 		{
+			final boolean clogShouldFinal = clogShould
+				&& !collectionLogUiState.isCollectionLogOpen(client);
 			Runnable buildAndEnqueue = () ->
 			{
-				final String clogJson = clogShould
+				final String clogJson = clogShouldFinal
 					? clogSitePayloadBuilder.buildJson(client, chronicleSnap, "logout-sync")
 					: null;
 				final String rosterJson = rosterWant
@@ -620,24 +719,24 @@ public class TerpinheimerPlugin extends Plugin
 						{
 						}
 					}
-					if (clogShould && clogJson != null)
+					if (clogShouldFinal && clogJson != null)
 					{
 						clogSiteSyncService.postClogJsonAsync(
 							config.clogSyncApiUrl(),
-							config.clogSyncApiSecret(),
+							resolveClanSecret(),
 							clogJson);
 					}
 					if (rosterWant && rosterJson != null)
 					{
 						clogSiteSyncService.postSiteJsonAsync(
 							config.clanRosterSyncApiUrl(),
-							config.clanRosterSyncApiSecret(),
+							resolveClanSecret(),
 							rosterJson);
 					}
 					pullAll();
 				});
 			};
-			if (clogShould)
+			if (clogShouldFinal)
 			{
 				collectionLogObtainedItemsTracker.runBeforeSyncExport(buildAndEnqueue);
 			}
@@ -660,7 +759,7 @@ public class TerpinheimerPlugin extends Plugin
 
 	private void maybeScheduleClogSiteSyncAfterSkillXp(Skill skill, int xpNow)
 	{
-		if (!config.clogSyncOnLogout() || !isClogSyncConfigured())
+		if (!isAutomaticClogSiteSyncEnabled())
 		{
 			return;
 		}
@@ -689,47 +788,58 @@ public class TerpinheimerPlugin extends Plugin
 			{
 				return;
 			}
-			if (!config.clogSyncOnLogout() || !isClogSyncConfigured())
+			if (!isAutomaticClogSiteSyncEnabled())
 			{
 				return;
 			}
-			clientThread.invokeLater(() ->
-			{
-				if (client.getGameState() != GameState.LOGGED_IN || worker == null || worker.isShutdown())
-				{
-					return;
-				}
-				List<ClogChronicleTracker.Line> snap = clogChronicleTracker.snapshotChronicle();
-				collectionLogObtainedItemsTracker.runBeforeSyncExport(() ->
-				{
-					String json = clogSitePayloadBuilder.buildJson(client, snap, "xp-debounce-sync");
-					if (json == null)
-					{
-						return;
-					}
-					worker.execute(() -> clogSiteSyncService.postClogJsonAsync(
-						config.clogSyncApiUrl(),
-						config.clogSyncApiSecret(),
-						json));
-				});
-			});
+			clientThread.invokeLater(() -> scheduleClogSiteSyncFromXpWhenSafe());
 		}, CLOG_XP_SYNC_DEBOUNCE_SECONDS, TimeUnit.SECONDS);
+	}
+
+	private boolean isAutomaticClogSiteSyncEnabled()
+	{
+		return false;
 	}
 
 	private boolean isClogSyncConfigured()
 	{
 		String u = config.clogSyncApiUrl();
-		String s = config.clogSyncApiSecret();
 		return u != null && u.trim().startsWith("https://")
-			&& s != null && !s.trim().isEmpty();
+			&& !resolveClanSecret().isEmpty();
 	}
 
 	private boolean isClanRosterSyncConfigured()
 	{
 		String u = config.clanRosterSyncApiUrl();
-		String s = config.clanRosterSyncApiSecret();
 		return u != null && u.trim().startsWith("https://")
-			&& s != null && !s.trim().isEmpty();
+			&& !resolveClanSecret().isEmpty();
+	}
+
+	/** Clan secret from RuneLite config storage (includes legacy keys). */
+	private String resolveClanSecret()
+	{
+		String st = configManager.getConfiguration(CONFIG_GROUP, "clanSecret");
+		if (st == null || st.trim().isEmpty())
+		{
+			st = config.clanSecret();
+		}
+		if (st == null || st.trim().isEmpty())
+		{
+			for (String legacyKey : new String[] {"clogSyncApiSecret", "clanRosterSyncApiSecret", "liveMapApiKey"})
+			{
+				String legacy = configManager.getConfiguration(CONFIG_GROUP, legacyKey);
+				if (legacy != null && !legacy.trim().isEmpty())
+				{
+					st = legacy;
+					break;
+				}
+			}
+		}
+		if (st == null)
+		{
+			return "";
+		}
+		return st.trim();
 	}
 
 	private void cancelClanRosterLoginDelay()
@@ -803,7 +913,7 @@ public class TerpinheimerPlugin extends Plugin
 			}
 			worker.execute(() -> clogSiteSyncService.postSiteJsonAsync(
 				config.clanRosterSyncApiUrl().trim(),
-				config.clanRosterSyncApiSecret(),
+				resolveClanSecret(),
 				json,
 				manual));
 		});
@@ -813,6 +923,18 @@ public class TerpinheimerPlugin extends Plugin
 	private void clogManualSyncChat(String message)
 	{
 		client.addChatMessage(ChatMessageType.CONSOLE, "Terpinheimer", message, "Terpinheimer");
+	}
+
+	private void maybeWarnRuneProfileClogConflict()
+	{
+		if (runeProfileClogConflictWarned || !runeProfilePresence.isEnabled())
+		{
+			return;
+		}
+		runeProfileClogConflictWarned = true;
+		clientThread.invokeLater(() -> clogManualSyncChat(
+			"RuneProfile is enabled: Terpinheimer does nothing with the collection log until you press Home → POST. "
+				+ "Use RuneProfile to browse the log; use POST only for the clan site."));
 	}
 
 	/** Game chat for manual roster POST problems (must run on client thread). */

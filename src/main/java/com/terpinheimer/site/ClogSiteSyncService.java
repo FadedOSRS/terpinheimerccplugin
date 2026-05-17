@@ -150,6 +150,11 @@ public class ClogSiteSyncService
 					{
 						chat(ChatMessageType.CONSOLE,
 							syncChat.failHttpPrefix + r.code() + "): " + truncate(detail));
+						if (syncChat == SiteSyncChat.COLLECTION_LOG && r.code() == 500)
+						{
+							chat(ChatMessageType.CONSOLE,
+								"Clog 500: server could not save. Check My profile RSN matches in-game exactly, or check site logs.");
+						}
 						if (syncChat == SiteSyncChat.ROSTER && r.code() == 404)
 						{
 							chat(ChatMessageType.CONSOLE,
