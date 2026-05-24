@@ -71,6 +71,14 @@ public class ClogSiteSyncService
 	}
 
 	/**
+	 * POST clan event attendance report to the website (manual from Clan Event tracker).
+	 */
+	public void postAttendanceJsonAsync(String httpsPostUrl, String authorizationSecret, String jsonBody)
+	{
+		postJsonToSite(httpsPostUrl, authorizationSecret, jsonBody, SiteSyncChat.ATTENDANCE);
+	}
+
+	/**
 	 * @param notifyChat when true, posts brief game chat when the request finishes (manual sync from UI).
 	 */
 	public void postClogJsonAsync(String httpsPostUrl, String authorizationSecret, String jsonBody, boolean notifyChat)
@@ -160,6 +168,11 @@ public class ClogSiteSyncService
 							chat(ChatMessageType.CONSOLE,
 								"Roster 404: that host has no POST handler for this path yet (common on local dev). Add the API route on the site or set “Clan roster sync API” to a URL where it exists.");
 						}
+						if (syncChat == SiteSyncChat.ATTENDANCE && r.code() == 404)
+						{
+							chat(ChatMessageType.CONSOLE,
+								"Attendance 404: that host has no POST handler for this path yet. Set Clan event attendance → Event attendance sync API to a URL where it exists.");
+						}
 					}
 				}
 			}
@@ -178,7 +191,12 @@ public class ClogSiteSyncService
 			"Posting clan roster to site…",
 			"Clan roster sync succeeded. Refresh the site if the roster looks stale.",
 			"Clan roster sync failed (network): ",
-			"Clan roster sync failed (HTTP ");
+			"Clan roster sync failed (HTTP "),
+		ATTENDANCE(true,
+			"Posting clan event attendance to site…",
+			"Event attendance posted to the website.",
+			"Event attendance post failed (network): ",
+			"Event attendance post failed (HTTP ");
 
 		private final boolean notify;
 		private final String pendingMessage;

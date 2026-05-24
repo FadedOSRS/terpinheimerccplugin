@@ -9,6 +9,8 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.clan.ClanMember;
+import net.runelite.api.clan.ClanSettings;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.util.Text;
@@ -58,6 +60,11 @@ public class ClanCofferDonationEventHandler
 			String message = Text.removeTags(event.getMessage());
 			if (!isLocalPlayerCofferDeposit(message))
 			{
+				return;
+			}
+			if (!isLocalPlayerTerpinheimerClanMember(message))
+			{
+				log.debug("Terpinheimer: clan coffer donation ignored — player is not in the Terpinheimer Jagex clan roster");
 				return;
 			}
 
@@ -194,5 +201,88 @@ public class ClanCofferDonationEventHandler
 			return false;
 		}
 		return Text.standardize(namePart).equals(localStd);
+	}
+
+	/**
+	 * Donation webhooks are Terpinheimer-only: local player must appear on the loaded Jagex clan roster
+	 * and the clan must be Terpinheimer (from {@link ClanSettings} or the {@code [Clan]} chat prefix).
+	 */
+	private boolean isLocalPlayerTerpinheimerClanMember(String cofferMessage)
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null || !local.isClanMember())
+		{
+			return false;
+		}
+
+		ClanSettings settings = client.getClanSettings();
+		if (settings == null)
+		{
+			return false;
+		}
+
+		String clanFromSettings = settings.getName();
+		String clanFromMessage = parseClanTagFromMessage(cofferMessage);
+		if (!isTerpinheimerClanName(clanFromSettings) && !isTerpinheimerClanName(clanFromMessage))
+		{
+			return false;
+		}
+
+		return findLocalPlayerInClanSettings(settings) != null;
+	}
+
+	private static boolean isTerpinheimerClanName(String name)
+	{
+		if (name == null || name.isEmpty())
+		{
+			return false;
+		}
+		return Text.standardize(name).contains("terpinheimer");
+	}
+
+	private static String parseClanTagFromMessage(String rawMessage)
+	{
+		if (rawMessage == null)
+		{
+			return null;
+		}
+		String plain = Text.removeTags(rawMessage).trim();
+		if (!plain.startsWith("[") || !plain.contains("]"))
+		{
+			return null;
+		}
+		int close = plain.indexOf(']');
+		if (close <= 1)
+		{
+			return null;
+		}
+		return plain.substring(1, close).trim();
+	}
+
+	private ClanMember findLocalPlayerInClanSettings(ClanSettings settings)
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null)
+		{
+			return null;
+		}
+		String std = Text.standardize(Text.removeTags(local.getName()));
+		ClanMember member = settings.findMember(std);
+		if (member != null)
+		{
+			return member;
+		}
+		for (Object o : settings.getMembers())
+		{
+			if (o instanceof ClanMember)
+			{
+				ClanMember cm = (ClanMember) o;
+				if (std.equals(Text.standardize(cm.getName())))
+				{
+					return cm;
+				}
+			}
+		}
+		return null;
 	}
 }

@@ -10,14 +10,12 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.NPC;
 import net.runelite.api.events.ChatMessage;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
@@ -27,8 +25,6 @@ import net.runelite.client.util.Text;
 @Singleton
 public class ClueScrollEventHandler
 {
-	private static final int CLUE_SCREENSHOT_DELAY_MS = 500;
-
 	private static final Pattern CLUE_COUNT_PATTERN = Pattern.compile(
 		"(?:completed|finished)(?: your)?(?: the)?\\s+([0-9,]+)", Pattern.CASE_INSENSITIVE);
 
@@ -36,9 +32,7 @@ public class ClueScrollEventHandler
 	private final TerpinheimerConfig config;
 	private final ItemManager itemManager;
 	private final WebhookMessageBuilder messageBuilder;
-	private final WebhookDispatcher dispatcher;
-	private final ClientThread clientThread;
-	private final ClientScreenshot screenshot;
+	private final DiscordWebhookCapture webhookCapture;
 	private final ScheduledExecutorService scheduledExecutor;
 
 	private volatile int pendingTierOrd = ClueNotifyTier.MEDIUM.ordinal();
@@ -51,18 +45,14 @@ public class ClueScrollEventHandler
 		TerpinheimerConfig config,
 		ItemManager itemManager,
 		WebhookMessageBuilder messageBuilder,
-		WebhookDispatcher dispatcher,
-		ClientThread clientThread,
-		ClientScreenshot screenshot,
+		DiscordWebhookCapture webhookCapture,
 		ScheduledExecutorService scheduledExecutor)
 	{
 		this.client = client;
 		this.config = config;
 		this.itemManager = itemManager;
 		this.messageBuilder = messageBuilder;
-		this.dispatcher = dispatcher;
-		this.clientThread = clientThread;
-		this.screenshot = screenshot;
+		this.webhookCapture = webhookCapture;
 		this.scheduledExecutor = scheduledExecutor;
 	}
 
@@ -188,20 +178,7 @@ public class ClueScrollEventHandler
 			pendingCount,
 			WikiLinks.formatGpCompact(totalFinal) + " gp");
 
-		if (config.clueSendImage())
-		{
-			scheduledExecutor.schedule(() -> clientThread.invokeLater(() ->
-			{
-				byte[] png = screenshot.capturePngOrNull();
-				String json = messageBuilder.toWebhookJson(embed);
-				dispatcher.enqueue(new WebhookPayload(json, png));
-			}), CLUE_SCREENSHOT_DELAY_MS, TimeUnit.MILLISECONDS);
-		}
-		else
-		{
-			String json = messageBuilder.toWebhookJson(embed);
-			dispatcher.enqueue(new WebhookPayload(json, null));
-		}
+		webhookCapture.send(scheduledExecutor, config.clueSendImage(), embed);
 	}
 
 	private static ClueNotifyTier parseTier(String plainLower)

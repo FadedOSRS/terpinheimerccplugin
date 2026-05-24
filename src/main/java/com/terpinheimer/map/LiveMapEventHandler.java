@@ -3,6 +3,7 @@ package com.terpinheimer.map;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
+import com.terpinheimer.site.TerpinheimerRemoteConfigService;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
@@ -32,16 +33,23 @@ public class LiveMapEventHandler
 
 	private final Client client;
 	private final TerpinheimerConfig config;
+	private final TerpinheimerRemoteConfigService remoteConfigService;
 	private final Gson gson;
 	private final LiveMapService liveMapService;
 
 	private int tickCounter;
 
 	@Inject
-	LiveMapEventHandler(Client client, TerpinheimerConfig config, Gson gson, LiveMapService liveMapService)
+	LiveMapEventHandler(
+		Client client,
+		TerpinheimerConfig config,
+		TerpinheimerRemoteConfigService remoteConfigService,
+		Gson gson,
+		LiveMapService liveMapService)
 	{
 		this.client = client;
 		this.config = config;
+		this.remoteConfigService = remoteConfigService;
 		this.gson = gson;
 		this.liveMapService = liveMapService;
 	}
@@ -69,7 +77,7 @@ public class LiveMapEventHandler
 		}
 		tickCounter = 0;
 
-		String base = config.liveMapApiBaseUrl();
+		String base = remoteConfigService.getLiveMapApiBase();
 		String key = config.clanSecret();
 		String postUrl = LiveMapService.buildPostUrl(base);
 		if (postUrl == null || !isValidHttpsBase(base) || key == null || key.trim().isEmpty())

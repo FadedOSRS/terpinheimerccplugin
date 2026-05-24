@@ -10,23 +10,17 @@ import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
 import net.runelite.api.events.StatChanged;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.util.Text;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 @Singleton
 public class LevelEventHandler
 {
-	private static final int LEVEL_SCREENSHOT_DELAY_MS = 500;
-
 	private final Client client;
 	private final TerpinheimerConfig config;
 	private final WebhookMessageBuilder messageBuilder;
-	private final WebhookDispatcher dispatcher;
-	private final ClientThread clientThread;
-	private final ClientScreenshot screenshot;
+	private final DiscordWebhookCapture webhookCapture;
 	private final ScheduledExecutorService scheduledExecutor;
 	private final DiscordLoginGrace loginGrace;
 
@@ -41,18 +35,14 @@ public class LevelEventHandler
 		Client client,
 		TerpinheimerConfig config,
 		WebhookMessageBuilder messageBuilder,
-		WebhookDispatcher dispatcher,
-		ClientThread clientThread,
-		ClientScreenshot screenshot,
+		DiscordWebhookCapture webhookCapture,
 		ScheduledExecutorService scheduledExecutor,
 		DiscordLoginGrace loginGrace)
 	{
 		this.client = client;
 		this.config = config;
 		this.messageBuilder = messageBuilder;
-		this.dispatcher = dispatcher;
-		this.clientThread = clientThread;
-		this.screenshot = screenshot;
+		this.webhookCapture = webhookCapture;
 		this.scheduledExecutor = scheduledExecutor;
 		this.loginGrace = loginGrace;
 	}
@@ -92,8 +82,7 @@ public class LevelEventHandler
 		{
 			String msg = LevelNotificationFormatter.formatCombat(
 				config.levelCombatNotifyMessage(), client, newCombat);
-			String json = messageBuilder.toWebhookJson(messageBuilder.combatLevelDescriptionEmbed(msg));
-			dispatcher.enqueue(new WebhookPayload(json, null));
+			enqueueCombatLevelPayload(msg);
 		}
 		previousCombat = newCombat;
 
@@ -157,22 +146,14 @@ public class LevelEventHandler
 		String author = client.getLocalPlayer() != null
 			? Text.removeTags(client.getLocalPlayer().getName()) : "Player";
 		String thumb = SkillWikiIcons.iconUrl(skill);
-		if (config.levelNotifySendImage())
-		{
-			scheduledExecutor.schedule(() -> clientThread.invokeLater(() ->
-			{
-				byte[] png = screenshot.capturePngOrNull();
-				String json = messageBuilder.toWebhookJson(
-					messageBuilder.levelUpDinkStyleEmbed(author, message, thumb));
-				dispatcher.enqueue(new WebhookPayload(json, png));
-			}), LEVEL_SCREENSHOT_DELAY_MS, TimeUnit.MILLISECONDS);
-		}
-		else
-		{
-			String json = messageBuilder.toWebhookJson(
-				messageBuilder.levelUpDinkStyleEmbed(author, message, thumb));
-			dispatcher.enqueue(new WebhookPayload(json, null));
-		}
+		webhookCapture.send(scheduledExecutor, config.levelNotifySendImage(),
+			messageBuilder.levelUpDinkStyleEmbed(author, message, thumb));
+	}
+
+	private void enqueueCombatLevelPayload(String message)
+	{
+		webhookCapture.send(scheduledExecutor, config.levelNotifySendImage(),
+			messageBuilder.combatLevelDescriptionEmbed(message));
 	}
 
 	private int computeCombat()

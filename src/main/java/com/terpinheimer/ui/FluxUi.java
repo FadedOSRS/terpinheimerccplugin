@@ -194,10 +194,12 @@ final class FluxUi
 		b.setOpaque(true);
 		b.setBackground(selected ? TAB_SELECTED : TAB_NORMAL);
 		b.setForeground(TEXT);
-		b.setFont(b.getFont().deriveFont(Font.PLAIN, 11f));
+		b.setFont(b.getFont().deriveFont(Font.PLAIN, 10f));
 		b.setFocusPainted(false);
+		b.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+		b.setMargin(new java.awt.Insets(2, 2, 2, 2));
 		Border outer = BorderFactory.createLineBorder(selected ? HEADER_GOLD : BORDER, selected ? 2 : 1, true);
-		b.setBorder(BorderFactory.createCompoundBorder(outer, new EmptyBorder(6, 4, 6, 4)));
+		b.setBorder(BorderFactory.createCompoundBorder(outer, new EmptyBorder(4, 2, 4, 2)));
 		return b;
 	}
 }

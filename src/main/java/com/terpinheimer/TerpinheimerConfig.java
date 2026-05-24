@@ -18,7 +18,6 @@ public interface TerpinheimerConfig extends Config
 	String SEC_DISCORD_COLLECTION = "terpinheimerDiscordCollection";
 	String SEC_DISCORD_LEVELS = "terpinheimerDiscordLevels";
 	String SEC_DISCORD_PROGRESSION = "terpinheimerDiscordProgression";
-	String SEC_LINKS = "terpinheimerLinks";
 	String SEC_LIVE_MAP = "terpinheimerLiveMap";
 	String SEC_ATTENDANCE = "terpinheimerAttendance";
 
@@ -32,7 +31,7 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigSection(
 		name = "Live clan map",
-		description = "Opt-in only (off by default). When enabled, POSTs your own position to a clan-hosted HTTPS API. Set the base URL under Links and Clan secret under General.",
+		description = "Opt-in only (off by default). When enabled, POSTs your own position to the clan live map API using Clan secret under General.",
 		position = 1,
 		closedByDefault = true
 	)
@@ -102,24 +101,9 @@ public interface TerpinheimerConfig extends Config
 	)
 	String attendanceSection = SEC_ATTENDANCE;
 
-	@ConfigSection(
-		name = "Links",
-		description = "Home shortcuts, clan calendar page & summary API, live map API base URL ({base}/post), and collection log / roster sync POST URLs. Shared auth is General → Clan secret.",
-		position = 10,
-		closedByDefault = true
-	)
-	String linksSection = SEC_LINKS;
-
 	// ---- General ----
 
-	@Range(min = 1, max = 60)
-	@ConfigItem(keyName = "refreshIntervalMinutes", name = "WOM refresh (minutes)", description = "How often to refresh Wise Old Man competition data", position = 0, section = SEC_GEN)
-	default int refreshIntervalMinutes()
-	{
-		return 7;
-	}
-
-	@ConfigItem(keyName = "announcementsEnabled", name = "Show announcements", description = "Show the announcements block on Home", position = 1, section = SEC_GEN)
+	@ConfigItem(keyName = "announcementsEnabled", name = "Show announcements", description = "Show the announcements block on Home", position = 0, section = SEC_GEN)
 	default boolean announcementsEnabled()
 	{
 		return true;
@@ -129,7 +113,7 @@ public interface TerpinheimerConfig extends Config
 		keyName = "announcementsText",
 		name = "Announcements text",
 		description = "Static text for the Home tab announcements block (use \\n for line breaks). Only Owner or Deputy Owner (Jagex clan rank, logged in) can save changes; other ranks revert to the last authorized text. Other plugin settings are not rank-locked.",
-		position = 2,
+		position = 1,
 		section = SEC_GEN
 	)
 	default String announcementsText()
@@ -144,36 +128,12 @@ public interface TerpinheimerConfig extends Config
 		return 23745;
 	}
 
-	@ConfigItem(
-		keyName = "womUpdateProfileOnLogout",
-		name = "Update WOM profile on logout",
-		description = "When on, Terpinheimer asks Wise Old Man to refresh your stats from the hiscores on logout / world hop (built-in—no WOM hub plugin needed). Turn on \"Sync WOM only after XP gain\" to limit calls.",
-		position = 4,
-		section = SEC_GEN
-	)
-	default boolean womUpdateProfileOnLogout()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "womSyncOnlyAfterProgress",
-		name = "Sync WOM only after XP gain",
-		description = "When off (default), the Wise Old Man profile update runs every logout or world hop while \"Update WOM profile on logout\" is on. When on, only after 10k+ total XP gained this session or any skill level-up (fewer API calls).",
-		position = 5,
-		section = SEC_GEN
-	)
-	default boolean womSyncOnlyAfterProgress()
-	{
-		return false;
-	}
-
 	@Range(min = 0, max = 100)
 	@ConfigItem(
 		keyName = "sidebarButtonPriority",
 		name = "Sidebar icon position",
 		description = "Sort order for this plugin's icon on the right sidebar. Lower numbers move it up; higher numbers move it down (same rule as RuneLite's other plugins).",
-		position = 6,
+		position = 5,
 		section = SEC_GEN
 	)
 	default int sidebarButtonPriority()
@@ -182,22 +142,10 @@ public interface TerpinheimerConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "partyLootShare",
-		name = "Party loot (Group tab)",
-		description = "In a RuneLite party (Party plugin + passphrase), broadcast your NPC and PvP loot to party members who also use Terpinheimer. The Group sidebar tab is shown whenever this is on so you can open the party loot log anytime; sharing still requires being in a party. Same party websocket as Party Panel https://runelite.net/plugin-hub/show/party-panel",
-		position = 7,
-		section = SEC_GEN
-	)
-	default boolean partyLootShare()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "clanSecret",
 		name = "Clan secret",
 		description = "One shared key for live map POSTs (Authorization header), collection log sync (syncToken), and clan roster sync. On terpinheimercc.com use the same value as RUNELITE_CLOG_SYNC_SECRET / your site RuneLite shared secret. For web session auth you may paste a full \"Bearer eyJ…\" JWT here instead.",
-		position = 8,
+		position = 7,
 		section = SEC_GEN,
 		secret = true
 	)
@@ -684,192 +632,16 @@ public interface TerpinheimerConfig extends Config
 		return false;
 	}
 
-	// ---- Links ----
-
-	@ConfigItem(keyName = "linkDiscord", name = "Discord invite", description = "Invite or server link opened from Home (leave empty to hide the button).", position = 0, section = SEC_LINKS, secret = true)
-	default String linkDiscord()
-	{
-		return "https://discord.gg/NTWqmhSx4U";
-	}
-
-	@ConfigItem(keyName = "linkNameChanges", name = "Name changes channel", description = "Discord channel URL (optional).", position = 1, section = SEC_LINKS, secret = true)
-	default String linkNameChanges()
-	{
-		return "https://discord.com/channels/1392895914762567861/1392903002507182150";
-	}
-
-	@ConfigItem(keyName = "linkAnnouncements", name = "Announcements channel", description = "Discord channel URL (optional).", position = 2, section = SEC_LINKS, secret = true)
-	default String linkAnnouncements()
-	{
-		return "https://discord.com/channels/1392895914762567861/1460796088524210276";
-	}
-
-	@ConfigItem(keyName = "linkEvents", name = "Events channel", description = "Discord channel URL (optional).", position = 3, section = SEC_LINKS, secret = true)
-	default String linkEvents()
-	{
-		return "https://discord.com/channels/1392895914762567861/1392903038066491432";
-	}
-
 	@ConfigItem(
-		keyName = "linkWebsite",
-		name = "Website",
-		description = "Clan website URL opened from Home → Links → Website (leave empty to hide the button).",
-		position = 4,
-		section = SEC_LINKS,
-		secret = true
+		keyName = "progressionSendImage",
+		name = "Attach screenshot (deaths, quests, combat achievements)",
+		description = "When on, death / quest / combat achievement webhooks include a game screenshot (GPU-safe capture). Death webhooks always attempt a screenshot when deaths are enabled.",
+		position = 3,
+		section = SEC_DISCORD_PROGRESSION
 	)
-	default String linkWebsite()
-	{
-		return "https://terpinheimercc.onrender.com/";
-	}
-
-	@ConfigItem(keyName = "linkWiseOldManGroup", name = "Wise Old Man group", description = "Opens your clan group on wiseoldman.net (optional).", position = 5, section = SEC_LINKS, secret = true)
-	default String linkWiseOldManGroup()
-	{
-		return "https://wiseoldman.net/groups/23745";
-	}
-
-	@ConfigItem(keyName = "linkLiveClanMap", name = "Live clan map", description = "Opens your live map page in the browser (optional; you host the site that consumes the Live clan map API).", position = 6, section = SEC_LINKS, secret = true)
-	default String linkLiveClanMap()
-	{
-		return "https://terpinheimercc.onrender.com/#/map";
-	}
-
-	@ConfigItem(
-		keyName = "clanCalendarPageUrl",
-		name = "Clan calendar page URL",
-		description = "Opened from Home → Events → Website row and Web Events → Open clan calendar. Hash routes (e.g. #/events) are OK.",
-		position = 7,
-		section = SEC_LINKS
-	)
-	default String clanCalendarPageUrl()
-	{
-		return "https://terpinheimercc.onrender.com/#/events";
-	}
-
-	@ConfigItem(
-		keyName = "clanCalendarSummaryApiUrl",
-		name = "Clan calendar summary API (GET)",
-		description = "HTTPS GET URL returning JSON: use ?format=array for a list of events (startsAt/endsAt), or a summary object (activeCount, phase, etc.). Drives Website status and Web Events list. API authorization is built into the plugin.",
-		position = 8,
-		section = SEC_LINKS
-	)
-	default String clanCalendarSummaryApiUrl()
-	{
-		return "https://terpinheimercc.onrender.com/api/runelite/clan-calendar-summary?format=array";
-	}
-
-	@ConfigItem(
-		keyName = "liveMapApiBaseUrl",
-		name = "Live map API base URL",
-		description = "HTTPS base only, no path — the live map plugin POSTs to {base}/post. Configure with Live clan map → Enable.",
-		position = 9,
-		section = SEC_LINKS,
-		secret = true
-	)
-	default String liveMapApiBaseUrl()
-	{
-		return "https://terpinheimercc.onrender.com";
-	}
-
-	@ConfigItem(
-		keyName = "clogManualSyncOnly",
-		name = "Manual collection log sync only",
-		description = "Always on: collection log site sync only runs from Home → POST collection log. Terpinheimer never hooks the log UI at startup.",
-		position = 8,
-		section = SEC_LINKS,
-		hidden = true
-	)
-	default boolean clogManualSyncOnly()
+	default boolean progressionSendImage()
 	{
 		return true;
-	}
-
-	@ConfigItem(
-		keyName = "clogSyncOnLogout",
-		name = "Sync collection log to website",
-		description = "Disabled — use Home → POST collection log to site.",
-		position = 10,
-		section = SEC_LINKS,
-		hidden = true
-	)
-	default boolean clogSyncOnLogout()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "clogRapidSyncOnNewItem",
-		name = "Rapid sync on new clog item",
-		description = "Disabled — use Home → POST collection log to site.",
-		position = 9,
-		section = SEC_LINKS,
-		hidden = true
-	)
-	default boolean clogRapidSyncOnNewItem()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "clogRunSearchOnManualSync",
-		name = "Run in-log Search on manual POST",
-		description = "Deprecated — no longer used. Terpinheimer does not run in-game collection log Search (avoids UI glitches). Sync uses varbits, chronicle chat, and items captured from new-unlock messages.",
-		position = 10,
-		section = SEC_LINKS,
-		hidden = true
-	)
-	default boolean clogRunSearchOnManualSync()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "clogSyncApiUrl",
-		name = "Collection log sync API (POST)",
-		description = "Full HTTPS URL for the collection log sync POST endpoint. TerpinheimerCC uses https://terpinheimercc.com/api/clog/sync (item-level varbits).",
-		position = 12,
-		section = SEC_LINKS
-	)
-	default String clogSyncApiUrl()
-	{
-		return "https://terpinheimercc.com/api/clog/sync";
-	}
-
-	@ConfigItem(
-		keyName = "clogSyncRuneScapeNameOverride",
-		name = "Collection log RuneScape name override",
-		description = "Optional. Leave blank to send your exact in-game name (same spelling and capitals) as JSON displayName — it must match My profile → RuneScape name on the site (that can differ from Admin → Set RSN). Paste here only if you need to force a different string than the client reads from your character.",
-		position = 13,
-		section = SEC_LINKS
-	)
-	default String clogSyncRuneScapeNameOverride()
-	{
-		return "";
-	}
-
-	@ConfigItem(
-		keyName = "clanRosterSyncEnabled",
-		name = "Sync Jagex clan roster to website",
-		description = "When on (and POST URL under Links + Clan secret under General are set), automatic roster POSTs run only while logged in as the Jagex clan Owner: after login, on logout/world hop, and on a timer. Other ranks do not run automatic sync (the Owner may still use Home → POST clan roster). When someone disappears from the roster, the next POST includes a leftMembers array with leftAtEpochMs and their last known rank/join so the site can set a leave date.",
-		position = 13,
-		section = SEC_LINKS
-	)
-	default boolean clanRosterSyncEnabled()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "clanRosterSyncApiUrl",
-		name = "Clan roster sync API (POST)",
-		description = "Full HTTPS URL for the roster snapshot POST. Default is the legacy TerpinheimerCC path; the plugin rewrites it to /api/clan/roster/sync when posting. Override if your site uses a different URL.",
-		position = 14,
-		section = SEC_LINKS
-	)
-	default String clanRosterSyncApiUrl()
-	{
-		return "https://terpinheimercc.com/api/runelite/roster-sync";
 	}
 
 	// ---- Clan event attendance ----
@@ -940,8 +712,8 @@ public interface TerpinheimerConfig extends Config
 
 	@ConfigItem(
 		keyName = "attendanceBlockCopyWhileRunning",
-		name = "Block copy while event runs",
-		description = "When on, Copy is only enabled after you stop the event (like the hub plugin option).",
+		name = "Block post while event runs",
+		description = "When on, Post to Website is only enabled after you stop the event.",
 		position = 5,
 		section = SEC_ATTENDANCE
 	)
@@ -955,7 +727,7 @@ public interface TerpinheimerConfig extends Config
 	@ConfigItem(
 		keyName = "liveMapEnabled",
 		name = "Enable live map API",
-		description = "When on, periodically POST your position to Links → Live map API base URL ({base}/post) using General → Clan secret.",
+		description = "When on, periodically POST your position to the clan live map API ({base}/post) using General → Clan secret.",
 		position = 0,
 		section = SEC_LIVE_MAP
 	)

@@ -10,7 +10,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -22,7 +21,6 @@ import net.runelite.api.Player;
 import net.runelite.api.VarPlayer;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
-import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.events.PlayerLootReceived;
 import net.runelite.client.eventbus.Subscribe;
@@ -33,7 +31,6 @@ import net.runelite.client.util.Text;
 @Singleton
 public class CollectionLogEventHandler
 {
-	private static final int COLLECTION_SCREENSHOT_DELAY_MS = 500;
 	private static final int CHAT_BUFFER_MAX = 24;
 	private static final long LOOT_CORRELATE_MAX_MS = 35_000L;
 
@@ -54,9 +51,7 @@ public class CollectionLogEventHandler
 	private final TerpinheimerConfig config;
 	private final ItemManager itemManager;
 	private final WebhookMessageBuilder messageBuilder;
-	private final WebhookDispatcher dispatcher;
-	private final ClientThread clientThread;
-	private final ClientScreenshot screenshot;
+	private final DiscordWebhookCapture webhookCapture;
 	private final ScheduledExecutorService scheduledExecutor;
 	private final CollectionLogUiState collectionLogUiState;
 
@@ -83,9 +78,7 @@ public class CollectionLogEventHandler
 		TerpinheimerConfig config,
 		ItemManager itemManager,
 		WebhookMessageBuilder messageBuilder,
-		WebhookDispatcher dispatcher,
-		ClientThread clientThread,
-		ClientScreenshot screenshot,
+		DiscordWebhookCapture webhookCapture,
 		ScheduledExecutorService scheduledExecutor,
 		CollectionLogUiState collectionLogUiState)
 	{
@@ -93,9 +86,7 @@ public class CollectionLogEventHandler
 		this.config = config;
 		this.itemManager = itemManager;
 		this.messageBuilder = messageBuilder;
-		this.dispatcher = dispatcher;
-		this.clientThread = clientThread;
-		this.screenshot = screenshot;
+		this.webhookCapture = webhookCapture;
 		this.scheduledExecutor = scheduledExecutor;
 		this.collectionLogUiState = collectionLogUiState;
 	}
@@ -231,20 +222,7 @@ public class CollectionLogEventHandler
 		String completionCount = extractCompletionCount(context);
 		final JsonObject embed = messageBuilder.collectionLogDinkStyleEmbed(
 			user, desc, thumb, completed, rank, source, completionCount);
-		if (config.collectionLogSendImage())
-		{
-			scheduledExecutor.schedule(() -> clientThread.invokeLater(() ->
-			{
-				byte[] png = screenshot.capturePngOrNull();
-				String json = messageBuilder.toWebhookJson(embed);
-				dispatcher.enqueue(new WebhookPayload(json, png));
-			}), COLLECTION_SCREENSHOT_DELAY_MS, TimeUnit.MILLISECONDS);
-		}
-		else
-		{
-			String json = messageBuilder.toWebhookJson(embed);
-			dispatcher.enqueue(new WebhookPayload(json, null));
-		}
+		webhookCapture.send(scheduledExecutor, config.collectionLogSendImage(), embed);
 	}
 
 	private static String extractItemName(String plain)

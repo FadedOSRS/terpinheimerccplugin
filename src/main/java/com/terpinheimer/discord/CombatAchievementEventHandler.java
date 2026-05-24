@@ -1,6 +1,7 @@
 package com.terpinheimer.discord;
 
 import com.terpinheimer.TerpinheimerConfig;
+import java.util.concurrent.ScheduledExecutorService;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.events.ChatMessage;
@@ -12,17 +13,20 @@ public class CombatAchievementEventHandler
 {
 	private final TerpinheimerConfig config;
 	private final WebhookMessageBuilder messageBuilder;
-	private final WebhookDispatcher dispatcher;
+	private final DiscordWebhookCapture webhookCapture;
+	private final ScheduledExecutorService scheduledExecutor;
 
 	@Inject
 	CombatAchievementEventHandler(
 		TerpinheimerConfig config,
 		WebhookMessageBuilder messageBuilder,
-		WebhookDispatcher dispatcher)
+		DiscordWebhookCapture webhookCapture,
+		ScheduledExecutorService scheduledExecutor)
 	{
 		this.config = config;
 		this.messageBuilder = messageBuilder;
-		this.dispatcher = dispatcher;
+		this.webhookCapture = webhookCapture;
+		this.scheduledExecutor = scheduledExecutor;
 	}
 
 	@Subscribe
@@ -32,13 +36,12 @@ public class CombatAchievementEventHandler
 		{
 			return;
 		}
-		String plain = Text.removeTags(event.getMessage()).toLowerCase();
-		if (!plain.contains("combat achievement"))
+		String plain = Text.removeTags(event.getMessage());
+		if (!plain.toLowerCase().contains("combat achievement"))
 		{
 			return;
 		}
-		String json = messageBuilder.toWebhookJson(
-			messageBuilder.simpleEmbed("Combat achievement", Text.removeTags(event.getMessage())));
-		dispatcher.enqueue(new WebhookPayload(json, null));
+		webhookCapture.send(scheduledExecutor, config.progressionSendImage(),
+			messageBuilder.simpleEmbed("Combat achievement", plain));
 	}
 }

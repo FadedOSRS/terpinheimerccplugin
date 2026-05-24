@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
+import com.terpinheimer.site.TerpinheimerRemoteConfigService;
 import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -29,23 +30,29 @@ public class ClogSitePayloadBuilder
 
 	private final Gson gson;
 	private final TerpinheimerConfig config;
+	private final TerpinheimerRemoteConfigService remoteConfigService;
 	private final ConfigManager configManager;
 	private final CollectionLogVarbitSnapshot collectionLogVarbitSnapshot;
 	private final CollectionLogItemStore collectionLogItemStore;
+	private final ClogAccountProgressSnapshot clogAccountProgressSnapshot;
 
 	@Inject
 	ClogSitePayloadBuilder(
 		Gson gson,
 		TerpinheimerConfig config,
+		TerpinheimerRemoteConfigService remoteConfigService,
 		ConfigManager configManager,
 		CollectionLogVarbitSnapshot collectionLogVarbitSnapshot,
-		CollectionLogItemStore collectionLogItemStore)
+		CollectionLogItemStore collectionLogItemStore,
+		ClogAccountProgressSnapshot clogAccountProgressSnapshot)
 	{
 		this.gson = gson;
 		this.config = config;
+		this.remoteConfigService = remoteConfigService;
 		this.configManager = configManager;
 		this.collectionLogVarbitSnapshot = collectionLogVarbitSnapshot;
 		this.collectionLogItemStore = collectionLogItemStore;
+		this.clogAccountProgressSnapshot = clogAccountProgressSnapshot;
 	}
 
 	public String buildJson(Client client, List<ClogChronicleTracker.Line> chronicle)
@@ -62,7 +69,7 @@ public class ClogSitePayloadBuilder
 		root.addProperty("syncedAtEpochMs", System.currentTimeMillis());
 		String rl = RuneLiteProperties.getVersion();
 		root.addProperty("runeliteVersion", rl != null ? rl : "unknown");
-		root.addProperty("pluginVersion", "2.1.0");
+		root.addProperty("pluginVersion", "2.1.3");
 		if (eventSource != null && !eventSource.isEmpty())
 		{
 			root.addProperty("eventSource", eventSource);
@@ -99,16 +106,51 @@ public class ClogSitePayloadBuilder
 		collectionLogVarbitSnapshot.snapshot(client, varbits);
 		root.add("collectionVarbits", varbits);
 
-		log.info("Terpinheimer clog sync payload: displayName={}, items={}, varbits={}",
-			root.get("displayName"), root.has("items") ? "yes" : "no", varbits.size());
+		clogAccountProgressSnapshot.writeTo(root, client);
+		flattenAccountProgressToRoot(root);
+
+		log.info("Terpinheimer clog sync payload: displayName={}, items={}, varbits={}, quests={}",
+			root.get("displayName"), root.has("items") ? "yes" : "no", varbits.size(),
+			root.has("quests") ? root.getAsJsonObject("quests").size() : 0);
 
 		return gson.toJson(root);
+	}
+
+	/** Copy {@code accountProgress} quest/music fields to the root for dev-server ingest (same as musicVarps). */
+	private static void flattenAccountProgressToRoot(JsonObject root)
+	{
+		if (root == null || !root.has("accountProgress"))
+		{
+			return;
+		}
+		com.google.gson.JsonElement apEl = root.get("accountProgress");
+		if (apEl == null || !apEl.isJsonObject())
+		{
+			return;
+		}
+		JsonObject ap = apEl.getAsJsonObject();
+		copyJsonMember(ap, root, "quests");
+		copyJsonMember(ap, root, "questsFinished");
+		copyJsonMember(ap, root, "questPoints");
+		copyJsonMember(ap, root, "questsFinishedCount");
+		copyJsonMember(ap, root, "achievementDiaries");
+		copyJsonMember(ap, root, "achievementDiaryTiers");
+		copyJsonMember(ap, root, "musicUnlocked");
+		copyJsonMember(ap, root, "musicUnlockedCount");
+	}
+
+	private static void copyJsonMember(JsonObject from, JsonObject to, String key)
+	{
+		if (from.has(key) && !to.has(key))
+		{
+			to.add(key, from.get(key).deepCopy());
+		}
 	}
 
 	private void addRuneScapeNameFields(JsonObject root, Client client)
 	{
 		String visible = runescapeDisplayNameForSite(client);
-		String override = config.clogSyncRuneScapeNameOverride();
+		String override = remoteConfigService.getClogRunescapeNameOverride();
 		String displayName;
 		if (override != null && !override.trim().isEmpty())
 		{

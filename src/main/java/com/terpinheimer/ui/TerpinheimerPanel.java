@@ -2,6 +2,7 @@ package com.terpinheimer.ui;
 
 import com.terpinheimer.TerpinheimerConfig;
 import com.terpinheimer.TerpinheimerPlugin;
+import com.terpinheimer.site.TerpinheimerRemoteConfigService;
 import com.terpinheimer.attendance.ClanAttendanceTracker;
 import com.terpinheimer.discord.WikiLinks;
 import com.terpinheimer.party.PartyLootRow;
@@ -20,8 +21,6 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
@@ -84,6 +83,7 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private final TerpinheimerPlugin plugin;
 	private final TerpinheimerConfig config;
+	private final TerpinheimerRemoteConfigService remoteConfigService;
 	private final PartyLootTracker partyLootTracker;
 	private final CardLayout cards = new CardLayout();
 	private final JPanel cardHost = new JPanel(cards);
@@ -100,7 +100,7 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private final JTextArea attendanceReportArea = new JTextArea();
 	private final JButton attendanceStartStopBtn = FluxUi.pillButton("Start event");
-	private final JButton attendanceCopyBtn = FluxUi.pillButton("Copy to clipboard");
+	private final JButton attendancePostBtn = FluxUi.pillButton("Post to Website");
 
 	private final JLabel webEventsStatus = new JLabel("—", SwingConstants.CENTER);
 	private final JLabel webEventsMeta = new JLabel(" ");
@@ -134,19 +134,32 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private DefaultTableModel homeEventsModel;
 	private JTable homeEventsTable;
-	private JScrollPane homeEventsScroll;
+	private JPanel homeEventsWrap;
 
 	private JButton homePostClanRosterBtn;
 
 	private Timer tickTimer;
 
-	public TerpinheimerPanel(TerpinheimerPlugin plugin, TerpinheimerConfig config, PartyLootTracker partyLootTracker)
+	public TerpinheimerPanel(
+		TerpinheimerPlugin plugin,
+		TerpinheimerConfig config,
+		PartyLootTracker partyLootTracker,
+		TerpinheimerRemoteConfigService remoteConfigService)
 	{
 		this.plugin = plugin;
 		this.config = config;
+		this.remoteConfigService = remoteConfigService;
 		this.partyLootTracker = partyLootTracker;
 		setLayout(new BorderLayout());
 		setBackground(FluxUi.BG);
+		addComponentListener(new ComponentAdapter()
+		{
+			@Override
+			public void componentResized(ComponentEvent e)
+			{
+				refreshHomeEventsTableLayout();
+			}
+		});
 
 		cardHost.setBackground(FluxUi.BG);
 		cardHost.add(buildHomeTab(), CARD_HOME);
@@ -163,10 +176,10 @@ public class TerpinheimerPanel extends PluginPanel
 		tabButtons[0] = FluxUi.tabToggle("Home", true);
 		tabButtons[1] = FluxUi.tabToggle("SOTW", false);
 		tabButtons[2] = FluxUi.tabToggle("BOTW", false);
-		tabButtons[3] = FluxUi.tabToggle("Web Events", false);
+		tabButtons[3] = FluxUi.tabToggle("Website Events", false);
 		tabButtons[3].setToolTipText("Clan calendar on your website");
-		groupTabButton = FluxUi.tabToggle("Group", false);
-		groupTabButton.setToolTipText("Party loot log (RuneLite party). Tab is always available when Party loot is on; join a party with the Party plugin to share drops.");
+		groupTabButton = FluxUi.tabToggle("Splits", false);
+		groupTabButton.setToolTipText("Party loot log — split loot by party size (RuneLite party).");
 		tabButtons[0].addActionListener(e -> selectTab(0));
 		tabButtons[1].addActionListener(e -> selectTab(1));
 		tabButtons[2].addActionListener(e -> selectTab(2));
@@ -197,6 +210,16 @@ public class TerpinheimerPanel extends PluginPanel
 		plugin.getClanAttendanceTracker().clearUiRefresh();
 	}
 
+	/** Updates only the Home announcements block from plugin config (instant; no WOM fetch). */
+	public void syncAnnouncementsFromPlugin()
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			lastAnnouncements = plugin.getAnnouncementsText();
+			refreshAnnouncements();
+		});
+	}
+
 	public void applyFromPlugin()
 	{
 		SwingUtilities.invokeLater(() ->
@@ -208,8 +231,35 @@ public class TerpinheimerPanel extends PluginPanel
 			fillCompetitionUi(true);
 			fillCompetitionUi(false);
 			tickCountdowns();
-			syncHomeEventsColumnWidths();
+			refreshHomeEventsTableLayout();
 		});
+	}
+
+	private int actualContentWidth()
+	{
+		int w = getWidth();
+		if (w > 0)
+		{
+			return Math.max(120, w - 16);
+		}
+		return FluxUi.contentWidth();
+	}
+
+	private void refreshHomeEventsTableLayout()
+	{
+		if (homeEventsTable == null || homeEventsWrap == null)
+		{
+			return;
+		}
+		int rowH = homeEventsTable.getRowHeight();
+		int headerH = homeEventsTable.getTableHeader().getPreferredSize().height;
+		int rows = Math.max(3, homeEventsTable.getRowCount());
+		int tableH = headerH + rowH * rows;
+		Dimension size = new Dimension(0, tableH + 8);
+		homeEventsWrap.setMinimumSize(size);
+		homeEventsWrap.setPreferredSize(size);
+		syncHomeEventsColumnWidths();
+		homeEventsWrap.revalidate();
 	}
 
 	private void selectTab(int idx)
@@ -251,25 +301,42 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private void rebuildSouthTabBar()
 	{
-		boolean showGroup = partyLootTracker.isPartyLootTabVisible();
-		if (showGroup == groupTabBarVisible && southTabBar.getComponentCount() > 0)
+		boolean showSplits = partyLootTracker.isPartyLootTabVisible();
+		if (showSplits == groupTabBarVisible && southTabBar.getComponentCount() > 0)
 		{
 			return;
 		}
-		groupTabBarVisible = showGroup;
+		groupTabBarVisible = showSplits;
 		southTabBar.removeAll();
-		int cols = groupTabBarVisible ? 5 : 4;
-		southTabBar.setLayout(new GridLayout(1, cols, 1, 0));
-		for (JButton tabButton : tabButtons)
+		southTabBar.setLayout(new BoxLayout(southTabBar, BoxLayout.Y_AXIS));
+
+		if (showSplits)
 		{
-			southTabBar.add(tabButton);
+			southTabBar.add(buildTabRow(tabButtons[0], tabButtons[1], tabButtons[2]));
+			southTabBar.add(Box.createVerticalStrut(2));
+			southTabBar.add(buildTabRow(tabButtons[3], groupTabButton));
 		}
-		if (groupTabBarVisible)
+		else
 		{
-			southTabBar.add(groupTabButton);
+			southTabBar.add(buildTabRow(tabButtons[0], tabButtons[1]));
+			southTabBar.add(Box.createVerticalStrut(2));
+			southTabBar.add(buildTabRow(tabButtons[2], tabButtons[3]));
 		}
 		southTabBar.revalidate();
 		southTabBar.repaint();
+	}
+
+	private static JPanel buildTabRow(JButton... buttons)
+	{
+		JPanel row = new JPanel(new GridLayout(1, buttons.length, 2, 0));
+		row.setOpaque(false);
+		row.setAlignmentX(Component.CENTER_ALIGNMENT);
+		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+		for (JButton button : buttons)
+		{
+			row.add(button);
+		}
+		return row;
 	}
 
 	/** Called from {@link PartyLootTracker} when party membership or loot rows change. */
@@ -367,7 +434,7 @@ public class TerpinheimerPanel extends PluginPanel
 		title.setAlignmentX(Component.CENTER_ALIGNMENT);
 		north.add(title);
 
-		JLabel blurb = new JLabel("<html><div style='width:" + tw + "px;color:#a8a8a8'>Join a RuneLite party (Party plugin) with the same passphrase as your friends. Your own NPC/PvP drops appear here immediately; other members need Terpinheimer with Party loot enabled to share. <b>Cost</b> uses GE guide prices. Click <b>Remove</b> on a row to delete it from this log only. The footer shows <b>Total</b> loot in this log and an equal <b>Each</b> split by party size.</div></html>");
+		JLabel blurb = new JLabel("<html><div style='width:" + tw + "px;color:#a8a8a8'>Join a RuneLite party (Party plugin) with the same passphrase as your friends. Enable Terpinheimer on every member — each account sees the combined loot log. Your own drops appear immediately; party loot uses the same websocket as Party Panel. <b>Cost</b> uses GE guide prices. Click <b>Remove</b> on a row to delete it from this log only. The footer shows <b>Total</b> loot and an equal <b>Each</b> split by party size.</div></html>");
 		blurb.setAlignmentX(Component.CENTER_ALIGNMENT);
 		north.add(blurb);
 
@@ -542,10 +609,10 @@ public class TerpinheimerPanel extends PluginPanel
 		homeEventsTable = new JTable(homeEventsModel);
 		FluxUi.styleDataTable(homeEventsTable);
 		homeEventsTable.setFillsViewportHeight(false);
-		homeEventsTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
-		int rowH = homeEventsTable.getRowHeight();
-		int cw = FluxUi.contentWidth();
-		homeEventsTable.setPreferredScrollableViewportSize(new Dimension(cw, rowH * 3));
+		homeEventsTable.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
+		homeEventsTable.getColumnModel().getColumn(0).setPreferredWidth(68);
+		homeEventsTable.getColumnModel().getColumn(0).setMinWidth(52);
+		homeEventsTable.getColumnModel().getColumn(0).setMaxWidth(96);
 		homeEventsTable.addMouseListener(new MouseAdapter()
 		{
 			@Override
@@ -554,25 +621,20 @@ public class TerpinheimerPanel extends PluginPanel
 				int row = homeEventsTable.rowAtPoint(e.getPoint());
 				if (row == HOME_ROW_WEBSITE)
 				{
-					openUrl(config.clanCalendarPageUrl());
+					openUrl(remoteConfigService.getClanCalendarPage());
 				}
 			}
 		});
 
-		homeEventsScroll = wrapScroll(homeEventsTable);
-		homeEventsScroll.getViewport().addComponentListener(new ComponentAdapter()
-		{
-			@Override
-			public void componentResized(ComponentEvent e)
-			{
-				syncHomeEventsColumnWidths();
-			}
-		});
+		homeEventsWrap = new JPanel(new BorderLayout());
+		homeEventsWrap.setOpaque(false);
+		homeEventsWrap.setBorder(FluxUi.tableBorder());
+		homeEventsWrap.add(homeEventsTable, BorderLayout.CENTER);
 
 		gbc.gridy = 3;
 		gbc.insets = new Insets(0, 0, 6, 0);
-		body.add(homeEventsScroll, gbc);
-		SwingUtilities.invokeLater(this::syncHomeEventsColumnWidths);
+		body.add(homeEventsWrap, gbc);
+		SwingUtilities.invokeLater(this::refreshHomeEventsTableLayout);
 
 		gbc.gridy = 4;
 		gbc.insets = new Insets(0, 0, 0, 0);
@@ -580,15 +642,15 @@ public class TerpinheimerPanel extends PluginPanel
 
 		gbc.gridy = 5;
 		gbc.insets = new Insets(0, 0, 4, 0);
-		body.add(linkButton("Discord", config.linkDiscord()), gbc);
+		body.add(linkButton("Discord", remoteConfigService::getDiscord), gbc);
 		gbc.gridy = 6;
-		body.add(linkButton("Name Changes", config.linkNameChanges()), gbc);
+		body.add(linkButton("Name Changes", remoteConfigService::getNameChangesChannel), gbc);
 		gbc.gridy = 7;
-		body.add(linkButton("Announcements", config.linkAnnouncements()), gbc);
+		body.add(linkButton("Announcements", remoteConfigService::getAnnouncementsChannel), gbc);
 		gbc.gridy = 8;
-		body.add(linkButton("Events", config.linkEvents()), gbc);
+		body.add(linkButton("Events", remoteConfigService::getEventsChannel), gbc);
 		gbc.gridy = 9;
-		body.add(linkButton("Website", config.linkWebsite()), gbc);
+		body.add(linkButton("Website", remoteConfigService::getWebsite), gbc);
 		gbc.gridy = 10;
 		gbc.insets = new Insets(0, 0, 4, 0);
 		JButton clanEventTracker = FluxUi.pillButton("Clan Event tracker");
@@ -597,10 +659,10 @@ public class TerpinheimerPanel extends PluginPanel
 		body.add(clanEventTracker, gbc);
 		gbc.gridy = 11;
 		gbc.insets = new Insets(0, 0, 4, 0);
-		body.add(linkButton("Wise Old Man", config.linkWiseOldManGroup()), gbc);
+		body.add(linkButton("Wise Old Man", remoteConfigService::getWiseOldManGroup), gbc);
 		gbc.gridy = 12;
 		gbc.insets = new Insets(0, 0, 6, 0);
-		body.add(linkButton("Live clan map", config.linkLiveClanMap()), gbc);
+		body.add(linkButton("Live clan map", remoteConfigService::getLiveClanMapPage), gbc);
 
 		JButton manual = FluxUi.pillButton("Refresh data now");
 		manual.addActionListener(e -> plugin.requestFullRefresh());
@@ -672,25 +734,24 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private void syncHomeEventsColumnWidths()
 	{
-		if (homeEventsTable == null || homeEventsScroll == null)
+		if (homeEventsTable == null || homeEventsWrap == null)
 		{
 			return;
 		}
-		int vw = homeEventsScroll.getViewport().getWidth();
+		int vw = homeEventsWrap.getWidth();
 		if (vw <= 0)
 		{
-			vw = FluxUi.contentWidth();
+			vw = actualContentWidth();
 		}
 		TableColumnModel cm = homeEventsTable.getColumnModel();
 		if (cm.getColumnCount() < 2)
 		{
 			return;
 		}
-		int usable = Math.max(80, vw - 4);
-		int w0 = Math.max(56, Math.min(100, usable * 30 / 100));
-		int w1 = Math.max(48, usable - w0);
+		int usable = Math.max(100, vw - 8);
+		int w0 = Math.max(52, Math.min(96, usable * 32 / 100));
 		cm.getColumn(0).setPreferredWidth(w0);
-		cm.getColumn(1).setPreferredWidth(w1);
+		cm.getColumn(0).setMaxWidth(w0);
 		homeEventsTable.revalidate();
 	}
 
@@ -752,16 +813,19 @@ public class TerpinheimerPanel extends PluginPanel
 		return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 
-	private JButton linkButton(String label, String url)
+	private JButton linkButton(String label, java.util.function.Supplier<String> urlSupplier)
 	{
 		JButton b = FluxUi.pillButton(label);
 		b.setHorizontalAlignment(SwingConstants.LEFT);
-		boolean ok = url != null && !url.isBlank();
-		b.setEnabled(ok);
-		if (ok)
+		b.setEnabled(true);
+		b.addActionListener(e ->
 		{
-			b.addActionListener(e -> openUrl(url));
-		}
+			String url = urlSupplier.get();
+			if (url != null && !url.isBlank())
+			{
+				openUrl(url);
+			}
+		});
 		return b;
 	}
 
@@ -845,11 +909,11 @@ public class TerpinheimerPanel extends PluginPanel
 			WomLeaderboardModels.CompetitionSnapshot snap = sotw ? lastSotw : lastBotw;
 			if (snap.getCompetitionId() > 0)
 			{
-				openUrl("https://wiseoldman.net/competitions/" + snap.getCompetitionId());
+				openUrl(remoteConfigService.getWiseOldManCompetitionPageBase() + "/" + snap.getCompetitionId());
 			}
 			else
 			{
-				openUrl(config.linkWiseOldManGroup());
+				openUrl(remoteConfigService.getWiseOldManGroup());
 			}
 		});
 
@@ -942,7 +1006,7 @@ public class TerpinheimerPanel extends PluginPanel
 		webEventsTable.setPreferredScrollableViewportSize(new Dimension(0, 200));
 
 		JButton openCal = FluxUi.pillButton("Open clan calendar");
-		openCal.addActionListener(e -> openUrl(config.clanCalendarPageUrl()));
+		openCal.addActionListener(e -> openUrl(remoteConfigService.getClanCalendarPage()));
 
 		JButton refresh = FluxUi.pillButton("Refresh now");
 		refresh.addActionListener(e -> plugin.requestFullRefresh());
@@ -981,7 +1045,7 @@ public class TerpinheimerPanel extends PluginPanel
 		center.add(top, BorderLayout.NORTH);
 		center.add(tableScroll, BorderLayout.CENTER);
 
-		JLabel head = new JLabel("<html><div style='width:" + tw + "px;text-align:center'><b>Web Events</b></div></html>");
+		JLabel head = new JLabel("<html><div style='width:" + tw + "px;text-align:center'><b>Website Events</b></div></html>");
 		head.setForeground(FluxUi.HEADER_GOLD);
 		head.setFont(head.getFont().deriveFont(Font.BOLD, 14f));
 		head.setBorder(new EmptyBorder(0, 0, 4, 0));
@@ -1000,8 +1064,6 @@ public class TerpinheimerPanel extends PluginPanel
 	 */
 	private JPanel buildAttendanceTab()
 	{
-		final int tw = FluxUi.textWidth();
-
 		attendanceReportArea.setEditable(false);
 		attendanceReportArea.setLineWrap(false);
 		attendanceReportArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -1016,22 +1078,24 @@ public class TerpinheimerPanel extends PluginPanel
 		reportScroll.setBorder(FluxUi.tableBorder());
 		reportScroll.getViewport().setBackground(FluxUi.BG_PANEL);
 
-		JLabel head = new JLabel("<html><div style='width:" + tw + "px;text-align:center'><b>Clan Event tracker</b></div></html>");
+		JLabel head = new JLabel("Clan Event tracker");
 		head.setForeground(FluxUi.HEADER_GOLD);
 		head.setFont(head.getFont().deriveFont(Font.BOLD, 14f));
 		head.setBorder(new EmptyBorder(0, 0, 8, 0));
 		head.setHorizontalAlignment(SwingConstants.CENTER);
+		head.setAlignmentX(Component.CENTER_ALIGNMENT);
 
 		attendanceStartStopBtn.addActionListener(e -> onAttendanceStartStop());
-		attendanceCopyBtn.addActionListener(e -> onAttendanceCopy());
+		attendancePostBtn.addActionListener(e -> onAttendancePostToWebsite());
 
 		JButton backBtn = FluxUi.pillButton("Back");
 		backBtn.addActionListener(e -> selectTab(0));
 
-		JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 4));
 		btnRow.setOpaque(false);
+		btnRow.setAlignmentX(Component.CENTER_ALIGNMENT);
 		btnRow.add(attendanceStartStopBtn);
-		btnRow.add(attendanceCopyBtn);
+		btnRow.add(attendancePostBtn);
 		btnRow.add(backBtn);
 
 		JPanel northStack = new JPanel();
@@ -1042,7 +1106,7 @@ public class TerpinheimerPanel extends PluginPanel
 
 		JPanel inner = new JPanel(new BorderLayout(0, 8));
 		inner.setBackground(FluxUi.BG);
-		inner.setBorder(new EmptyBorder(4, 8, 4, 8));
+		inner.setBorder(new EmptyBorder(4, 6, 4, 6));
 		inner.add(northStack, BorderLayout.NORTH);
 		inner.add(reportScroll, BorderLayout.CENTER);
 		return inner;
@@ -1054,15 +1118,16 @@ public class TerpinheimerPanel extends PluginPanel
 		attendanceReportArea.setText(tracker.getCurrentReport());
 		attendanceStartStopBtn.setText(tracker.isEventRunning() ? "Stop event" : "Start event");
 		boolean block = config.attendanceBlockCopyWhileRunning() && tracker.isEventRunning();
-		attendanceCopyBtn.setEnabled(!block);
+		attendancePostBtn.setEnabled(!block);
 	}
 
 	private void onAttendanceStartStop()
 	{
 		ClanAttendanceTracker tracker = plugin.getClanAttendanceTracker();
+		boolean stopping = tracker.isEventRunning();
+
 		if (config.attendanceConfirmStartStop())
 		{
-			boolean stopping = tracker.isEventRunning();
 			String msg = stopping
 				? "Stop the event and finalize the attendance report?"
 				: "Start a new event? Current tracking data will be cleared.";
@@ -1074,27 +1139,45 @@ public class TerpinheimerPanel extends PluginPanel
 			}
 		}
 
-		plugin.runOnClientThread(() ->
+		if (stopping)
 		{
-			if (tracker.isEventRunning())
-			{
-				tracker.stopEvent();
-			}
-			else
-			{
-				tracker.startEvent();
-			}
-		});
-	}
+			plugin.runOnClientThread(tracker::stopEvent);
+			return;
+		}
 
-	private void onAttendanceCopy()
-	{
-		String t = attendanceReportArea.getText();
-		if (t == null || t.isBlank())
+		String name = JOptionPane.showInputDialog(this,
+			"Enter a name for this clan event:",
+			"Clan Event tracker",
+			JOptionPane.QUESTION_MESSAGE);
+		if (name == null)
 		{
 			return;
 		}
-		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(t), null);
+
+		final String eventName = name.trim();
+		plugin.runOnClientThread(() -> tracker.startEvent(eventName));
+	}
+
+	private void onAttendancePostToWebsite()
+	{
+		if (!plugin.isAttendanceSitePostReady())
+		{
+			JOptionPane.showMessageDialog(this,
+				"Set Clan secret under General in Terpinheimer plugin settings, then refresh data.",
+				"Post to Website",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		String t = attendanceReportArea.getText();
+		if (t == null || t.isBlank() || !plugin.getClanAttendanceTracker().hasSiteAttendanceRecords())
+		{
+			JOptionPane.showMessageDialog(this,
+				"Start an event with a name, wait for members to appear, stop the event, then post.",
+				"Post to Website",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		plugin.requestAttendanceSitePost();
 	}
 
 	private void onPostCollectionLogClicked()
@@ -1102,7 +1185,7 @@ public class TerpinheimerPanel extends PluginPanel
 		if (!plugin.isClogSiteManualSyncReady())
 		{
 			JOptionPane.showMessageDialog(this,
-				"In Terpinheimer plugin settings (Links), set Collection log sync API (POST) to an https:// URL and set Clan secret under General.",
+				"Set Clan secret under General in Terpinheimer plugin settings, then refresh data.",
 				"Collection log sync",
 				JOptionPane.INFORMATION_MESSAGE);
 			return;
@@ -1115,7 +1198,7 @@ public class TerpinheimerPanel extends PluginPanel
 		if (!plugin.isClanRosterManualSyncReady())
 		{
 			JOptionPane.showMessageDialog(this,
-				"In Terpinheimer plugin settings (Links), set Clan roster sync API (POST) to an https:// URL and set Clan secret under General.",
+				"Set Clan secret under General in Terpinheimer plugin settings, then refresh data.",
 				"Update roster",
 				JOptionPane.INFORMATION_MESSAGE);
 			return;
@@ -1252,7 +1335,7 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private void refreshAnnouncements()
 	{
-		if (!config.announcementsEnabled())
+		if (!plugin.isAnnouncementsVisible())
 		{
 			announcementsArea.setVisible(false);
 			return;
@@ -1403,6 +1486,7 @@ public class TerpinheimerPanel extends PluginPanel
 		{
 			homeEventsModel.setValueAt(plugin.getClanCalendarSummaryStatus(), HOME_ROW_WEBSITE, 1);
 		}
+		homeEventsTable.repaint();
 	}
 
 	private void openUrl(String url)
@@ -1470,7 +1554,7 @@ public class TerpinheimerPanel extends PluginPanel
 		{
 			b.setBorder(BorderFactory.createCompoundBorder(
 				BorderFactory.createLineBorder(sel ? FluxUi.HEADER_GOLD : FluxUi.BORDER, sel ? 2 : 1, true),
-				new EmptyBorder(8, 12, 8, 12)));
+				new EmptyBorder(4, 2, 4, 2)));
 		}
 	}
 }

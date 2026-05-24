@@ -5,7 +5,12 @@
  */
 package com.terpinheimer.attendance;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Map;
@@ -32,6 +37,14 @@ import net.runelite.client.util.Text;
 @Singleton
 public class ClanAttendanceTracker
 {
+	private static final DateTimeFormatter SITE_TIME_FORMAT =
+		DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
+
+	private static final String KEY_EVENT_NAME = "Event Name";
+	private static final String KEY_MEMBER_NAME = "name";
+	private static final String KEY_TIME_JOINED = "Time Joined";
+	private static final String KEY_TIME_LEFT = "Time left";
+
 	private final Client client;
 	private final TerpinheimerConfig config;
 
@@ -39,6 +52,8 @@ public class ClanAttendanceTracker
 
 	private int eventStartedAt;
 	private int eventStoppedAt;
+	private long eventStartedAtEpochMs;
+	private long eventStoppedAtEpochMs;
 	private volatile boolean eventRunning;
 
 	private final Map<String, MemberAttendance> attendanceBuffer = new TreeMap<>();
@@ -47,6 +62,28 @@ public class ClanAttendanceTracker
 	private int scanDelay = -1;
 
 	private volatile String currentReport = "";
+	private volatile String eventName = "";
+
+	public String getEventName()
+	{
+		return eventName;
+	}
+
+	public boolean hasSiteAttendanceRecords()
+	{
+		if (eventName == null || eventName.isEmpty())
+		{
+			return false;
+		}
+		for (MemberAttendance ma : attendanceBuffer.values())
+		{
+			if (ma.firstJoinedAtEpochMs > 0)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
 
 	@Inject
 	ClanAttendanceTracker(Client client, TerpinheimerConfig config)
@@ -75,6 +112,63 @@ public class ClanAttendanceTracker
 		return currentReport;
 	}
 
+	/** Adds attendance report fields to a site POST JSON object (see {@code AttendanceSitePayloadBuilder}). */
+	public void appendSitePayloadFields(JsonObject root, Client client)
+	{
+		String evt = eventName != null ? eventName : "";
+		root.addProperty("eventName", evt);
+		root.addProperty(KEY_EVENT_NAME, evt);
+
+		long eventEndMs = eventRunning ? System.currentTimeMillis() : eventStoppedAtEpochMs;
+		if (eventEndMs <= 0)
+		{
+			eventEndMs = System.currentTimeMillis();
+		}
+
+		JsonArray records = new JsonArray();
+		JsonArray attendance = new JsonArray();
+		for (Map.Entry<String, MemberAttendance> e : attendanceBuffer.entrySet())
+		{
+			MemberAttendance ma = e.getValue();
+			if (ma.firstJoinedAtEpochMs <= 0)
+			{
+				continue;
+			}
+			long leftMs = ma.isPresent ? eventEndMs : ma.lastLeftAtEpochMs;
+			if (leftMs <= 0)
+			{
+				leftMs = eventEndMs;
+			}
+			if (leftMs < ma.firstJoinedAtEpochMs)
+			{
+				leftMs = ma.firstJoinedAtEpochMs;
+			}
+
+			JsonObject row = buildSiteAttendanceRow(evt, ma, leftMs);
+			records.add(row);
+			attendance.add(buildSiteAttendanceRow(evt, ma, leftMs));
+		}
+		root.add("records", records);
+		root.add("attendance", attendance);
+	}
+
+	private static JsonObject buildSiteAttendanceRow(String eventName, MemberAttendance ma, long leftMs)
+	{
+		JsonObject row = new JsonObject();
+		row.addProperty(KEY_EVENT_NAME, eventName);
+		row.addProperty(KEY_MEMBER_NAME, ma.displayName);
+		row.addProperty(KEY_TIME_JOINED, formatSiteTime(ma.firstJoinedAtEpochMs));
+		row.addProperty(KEY_TIME_LEFT, formatSiteTime(leftMs));
+		row.addProperty("joinedAt", Instant.ofEpochMilli(ma.firstJoinedAtEpochMs).toString());
+		row.addProperty("leftAt", Instant.ofEpochMilli(leftMs).toString());
+		return row;
+	}
+
+	private static String formatSiteTime(long epochMs)
+	{
+		return SITE_TIME_FORMAT.format(Instant.ofEpochMilli(epochMs));
+	}
+
 	private void notifyUi()
 	{
 		Runnable r = uiRefresh;
@@ -84,11 +178,14 @@ public class ClanAttendanceTracker
 		}
 	}
 
-	public void startEvent()
+	public void startEvent(String name)
 	{
 		attendanceBuffer.clear();
 		clanMemberKeys.clear();
+		eventName = name != null ? name.trim() : "";
 		eventStartedAt = client.getTickCount();
+		eventStartedAtEpochMs = System.currentTimeMillis();
+		eventStoppedAtEpochMs = 0L;
 		eventRunning = true;
 		scanDelay = 1;
 		rebuildReport(false);
@@ -102,6 +199,7 @@ public class ClanAttendanceTracker
 			compileTicks(key);
 		}
 		eventStoppedAt = client.getTickCount();
+		eventStoppedAtEpochMs = System.currentTimeMillis();
 		eventRunning = false;
 		rebuildReport(true);
 		notifyUi();
@@ -276,12 +374,16 @@ public class ClanAttendanceTracker
 		String playerKey = nameKey(player.getName());
 		if (!attendanceBuffer.containsKey(playerKey))
 		{
+			long now = System.currentTimeMillis();
+			String displayName = Text.removeTags(player.getName());
 			MemberAttendance ma = new MemberAttendance(
 				player,
+				displayName,
 				client.getTickCount() - eventStartedAt,
 				client.getTickCount(),
 				0,
-				false);
+				true);
+			ma.firstJoinedAtEpochMs = now;
 			attendanceBuffer.put(playerKey, ma);
 		}
 	}
@@ -295,6 +397,7 @@ public class ClanAttendanceTracker
 			return;
 		}
 		ma.isPresent = false;
+		ma.lastLeftAtEpochMs = System.currentTimeMillis();
 	}
 
 	private void unpausePlayer(String playerName)
@@ -349,6 +452,12 @@ public class ClanAttendanceTracker
 		}
 
 		StringBuilder out = new StringBuilder();
+		if (eventName != null && !eventName.isEmpty())
+		{
+			out.append("Event: ");
+			out.append(eventName);
+			out.append('\n');
+		}
 		out.append("Event duration: ");
 		int endTick = eventRunning ? client.getTickCount() : eventStoppedAt;
 		out.append(timeFormat(ticksToSeconds(endTick - eventStartedAt)));
