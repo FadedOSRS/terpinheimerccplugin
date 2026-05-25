@@ -2,6 +2,8 @@ package com.terpinheimer;
 
 import com.google.inject.Provides;
 import com.terpinheimer.attendance.ClanAttendanceTracker;
+import com.terpinheimer.clan.ClanMemberRankDisplay;
+import com.terpinheimer.clan.RankTitlePermissionList;
 import com.terpinheimer.discord.ClanCofferDonationEventHandler;
 import com.terpinheimer.discord.ClueScrollEventHandler;
 import com.terpinheimer.discord.CollectionLogEventHandler;
@@ -196,11 +198,15 @@ public class TerpinheimerPlugin extends Plugin
 	private volatile ScheduledFuture<?> clanRosterLoginDelayTask;
 	private int ticksUntilClanRosterPeriodic = -1;
 	/**
-	 * Refreshed every {@link GameTick} on the client thread while the plugin is running. {@code true} when
-	 * logged in and the local player is the Jagex clan Owner. Used for automatic roster POST and for the
-	 * sidebar Home button (read from the EDT via {@link #isLocalPlayerJagexClanOwnerCached()}).
+	 * Refreshed every {@link GameTick} on the client thread. {@code true} when the local player's in-game
+	 * rank title matches {@link TerpinheimerRemoteConfigService#getClanRosterPostRankTitles()}.
 	 */
-	private volatile boolean clanOwnerForRosterAutoSync;
+	private volatile boolean clanRosterPostAllowedCached;
+	/**
+	 * Refreshed every {@link GameTick}. {@code true} when the player may use Clan Event tracker, or when
+	 * the website leaves the allow-list empty (no restriction).
+	 */
+	private volatile boolean clanEventTrackerAllowedCached;
 	/** Previous game state for roster snapshot reset (skip reset on world hop). */
 	private GameState rosterDiffPrevGameState = GameState.LOGIN_SCREEN;
 
@@ -589,8 +595,8 @@ public class TerpinheimerPlugin extends Plugin
 		if ("clanSecret".equals(ev.getKey()) || "clanRosterSyncApiSecret".equals(ev.getKey()))
 			{
 				if (client.getGameState() == GameState.LOGGED_IN
-					&& remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured()
-					&& isLocalPlayerJagexClanOwner())
+				&& remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured()
+				&& isLocalPlayerAllowedClanRosterPost())
 				{
 					ticksUntilClanRosterPeriodic = CLAN_ROSTER_PERIODIC_TICKS;
 					scheduleClanRosterSyncAfterLogin();
@@ -654,8 +660,8 @@ public class TerpinheimerPlugin extends Plugin
 					sessionPlayerName = Text.removeTags(client.getLocalPlayer().getName());
 				}
 				sessionBaselineXp = client.getOverallExperience();
-				clanOwnerForRosterAutoSync = isLocalPlayerJagexClanOwner();
-				if (remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured() && clanOwnerForRosterAutoSync)
+				refreshRankPermissionCache();
+				if (remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured() && clanRosterPostAllowedCached)
 				{
 					ticksUntilClanRosterPeriodic = CLAN_ROSTER_PERIODIC_TICKS;
 					scheduleClanRosterSyncAfterLogin();
@@ -669,7 +675,8 @@ public class TerpinheimerPlugin extends Plugin
 			case LOGIN_SCREEN:
 			case HOPPING:
 				onSessionEndExternalSync();
-				clanOwnerForRosterAutoSync = false;
+				clanRosterPostAllowedCached = false;
+				clanEventTrackerAllowedCached = false;
 				break;
 			default:
 				break;
@@ -705,11 +712,12 @@ public class TerpinheimerPlugin extends Plugin
 	{
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
-			clanOwnerForRosterAutoSync = isLocalPlayerJagexClanOwner();
+			refreshRankPermissionCache();
 		}
 		else
 		{
-			clanOwnerForRosterAutoSync = false;
+			clanRosterPostAllowedCached = false;
+			clanEventTrackerAllowedCached = false;
 		}
 
 		if (!remoteConfigService.isClanRosterSyncEnabled() || !isClanRosterSyncConfigured()
@@ -718,7 +726,7 @@ public class TerpinheimerPlugin extends Plugin
 			ticksUntilClanRosterPeriodic = -1;
 			return;
 		}
-		if (!clanOwnerForRosterAutoSync)
+		if (!clanRosterPostAllowedCached)
 		{
 			ticksUntilClanRosterPeriodic = -1;
 			return;
@@ -740,7 +748,7 @@ public class TerpinheimerPlugin extends Plugin
 		boolean womWant = WOM_UPDATE_PROFILE_ON_LOGOUT;
 		boolean clogWant = isAutomaticClogSiteSyncEnabled();
 		boolean rosterWant = remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured()
-			&& clanOwnerForRosterAutoSync;
+			&& clanRosterPostAllowedCached;
 		if (!womWant && !clogWant && !rosterWant)
 		{
 			if (sessionPlayerName != null)
@@ -971,7 +979,7 @@ public class TerpinheimerPlugin extends Plugin
 		final boolean manual = !requireAutoSyncEnabled;
 		clientThread.invokeLater(() ->
 		{
-			if (requireAutoSyncEnabled && !isLocalPlayerJagexClanOwner())
+			if (requireAutoSyncEnabled && !isLocalPlayerAllowedClanRosterPost())
 			{
 				return;
 			}
@@ -1057,27 +1065,90 @@ public class TerpinheimerPlugin extends Plugin
 		return ClanRank.OWNER.equals(rank) || ClanRank.DEPUTY_OWNER.equals(rank);
 	}
 
-	/**
-	 * Whether the logged-in player is the Jagex clan Owner (not Deputy Owner). Must run on the client thread.
-	 */
-	public boolean isLocalPlayerJagexClanOwner()
+	/** Must run on the client thread. */
+	public boolean isLocalPlayerAllowedClanRosterPost()
 	{
-		ClanMember member = findLocalPlayerInClanSettings();
-		if (member == null)
+		return rankTitleAllowed(remoteConfigService.getClanRosterPostRankTitles(), true);
+	}
+
+	/** For Swing EDT; updated each game tick on the client thread. */
+	public boolean isLocalPlayerAllowedClanRosterPostCached()
+	{
+		return clanRosterPostAllowedCached;
+	}
+
+	/** Must run on the client thread. */
+	public boolean isLocalPlayerAllowedClanEventTracker()
+	{
+		List<String> allowed = remoteConfigService.getClanEventTrackerRankTitles();
+		if (allowed.isEmpty())
 		{
-			return false;
+			return client.getGameState() == GameState.LOGGED_IN;
 		}
-		ClanRank rank = member.getRank();
-		return ClanRank.OWNER.equals(rank);
+		return rankTitleAllowed(allowed, false);
+	}
+
+	/** For Swing EDT; updated each game tick on the client thread. */
+	public boolean isLocalPlayerAllowedClanEventTrackerCached()
+	{
+		return clanEventTrackerAllowedCached;
+	}
+
+	public List<String> getClanRosterPostRankTitlesForDisplay()
+	{
+		return remoteConfigService.getClanRosterPostRankTitles();
+	}
+
+	public List<String> getClanEventTrackerRankTitlesForDisplay()
+	{
+		return remoteConfigService.getClanEventTrackerRankTitles();
 	}
 
 	/**
-	 * Same meaning as {@link #isLocalPlayerJagexClanOwner()} for UI that runs on the Swing EDT: value is
-	 * updated each game tick on the client thread (and cleared when not logged in). Safe to call from the panel timer.
+	 * @deprecated Use {@link #isLocalPlayerAllowedClanRosterPost()}.
 	 */
+	@Deprecated
+	public boolean isLocalPlayerJagexClanOwner()
+	{
+		return isLocalPlayerAllowedClanRosterPost();
+	}
+
+	/**
+	 * @deprecated Use {@link #isLocalPlayerAllowedClanRosterPostCached()}.
+	 */
+	@Deprecated
 	public boolean isLocalPlayerJagexClanOwnerCached()
 	{
-		return clanOwnerForRosterAutoSync;
+		return clanRosterPostAllowedCached;
+	}
+
+	private void refreshRankPermissionCache()
+	{
+		clanRosterPostAllowedCached = isLocalPlayerAllowedClanRosterPost();
+		clanEventTrackerAllowedCached = isLocalPlayerAllowedClanEventTracker();
+	}
+
+	/**
+	 * @param requireClanMember when true, player must appear in {@link ClanSettings} with a rank
+	 */
+	private boolean rankTitleAllowed(List<String> allowedTitles, boolean requireClanMember)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return false;
+		}
+		if (allowedTitles == null || allowedTitles.isEmpty())
+		{
+			return false;
+		}
+		ClanMember member = findLocalPlayerInClanSettings();
+		if (member == null)
+		{
+			return !requireClanMember;
+		}
+		ClanSettings settings = client.getClanSettings();
+		String display = ClanMemberRankDisplay.forMember(settings, member);
+		return RankTitlePermissionList.matches(display, allowedTitles);
 	}
 
 	/** @return clan member row for the local player, or {@code null} */

@@ -30,6 +30,24 @@ Optionally updates Wise Old Man on logout when XP thresholds are met.
 - Add optional quick links (Discord, WOM group URL, channels, etc.)
 - Configure one Discord webhook and notification settings
 
+### Website permissions (`GET /api/runelite/plugin-config`)
+
+Clan officers can control who may use sensitive features by listing **in-game rank titles** (the same labels shown in the Jagex clan panel and roster sync), comma-separated:
+
+```json
+{
+  "permissions": {
+    "clanRosterPostRankTitles": "Owner,Deputy Owner,Ruby",
+    "clanEventTrackerRankTitles": "Deputy Owner,Ruby,Administrator"
+  }
+}
+```
+
+- **`clanRosterPostRankTitles`** — who may auto/manual POST the clan roster (default when omitted: `Owner`).
+- **`clanEventTrackerRankTitles`** — who may open Clan Event tracker and start/stop/post attendance (default when omitted: no restriction — any logged-in player).
+
+Matching is case-insensitive. Use the exact title text from the game (e.g. `Ruby`, not `Rank 5`).
+
 ## Credits
 
 Inspired by existing RuneLite community tools and patterns:

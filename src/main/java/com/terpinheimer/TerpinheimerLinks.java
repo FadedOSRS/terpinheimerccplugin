@@ -26,4 +26,13 @@ public final class TerpinheimerLinks
 	public static final String CLAN_ROSTER_SYNC_API = "https://terpinheimercc.com/api/runelite/roster-sync";
 	public static final String ATTENDANCE_SYNC_API = "https://terpinheimercc.com/api/clan/attendance/sync";
 	public static final String WISE_OLD_MAN_COMPETITION_PAGE_BASE = "https://wiseoldman.net/competitions";
+
+	/** Built-in default when the website omits {@code permissions.clanRosterPostRankTitles}. */
+	public static final String CLAN_ROSTER_POST_RANK_TITLES_DEFAULT = "Owner";
+
+	/**
+	 * Built-in default when the website omits {@code permissions.clanEventTrackerRankTitles}.
+	 * Empty = no rank restriction (anyone may use the tracker).
+	 */
+	public static final String CLAN_EVENT_TRACKER_RANK_TITLES_DEFAULT = "";
 }

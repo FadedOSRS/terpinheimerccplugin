@@ -54,10 +54,25 @@ final class TerpinheimerRemoteConfigDto
 		String runescapeNameOverride;
 	}
 
+	/**
+	 * Rank titles allowed for sensitive actions. Values are comma-separated in-game rank titles
+	 * (e.g. {@code Deputy Owner,Ruby}) as shown in the Jagex clan panel / roster sync payload.
+	 */
+	static final class Permissions
+	{
+		/** Who may POST the clan roster (auto + manual). Empty on server → plugin uses built-in default. */
+		String clanRosterPostRankTitles;
+		/**
+		 * Who may use Clan Event tracker (start/stop/post). Empty on server → any logged-in player.
+		 */
+		String clanEventTrackerRankTitles;
+	}
+
 	Links links = new Links();
 	Apis apis = new Apis();
 	Features features = new Features();
 	WiseOldMan wiseOldMan = new WiseOldMan();
 	Announcements announcements = new Announcements();
 	CollectionLog collectionLog = new CollectionLog();
+	Permissions permissions = new Permissions();
 }

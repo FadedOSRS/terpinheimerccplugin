@@ -510,6 +510,17 @@ public class TerpinheimerPanel extends PluginPanel
 	/** Opens the embedded attendance view from Home (not a bottom-tab duplicate). */
 	private void showClanAttendanceCard()
 	{
+		if (!plugin.isLocalPlayerAllowedClanEventTrackerCached())
+		{
+			String allowed = com.terpinheimer.clan.RankTitlePermissionList.formatForMessage(
+				plugin.getClanEventTrackerRankTitlesForDisplay());
+			JOptionPane.showMessageDialog(this,
+				"Clan Event tracker is limited to these in-game rank titles (set on terpinheimercc.com): "
+					+ allowed,
+				"Clan Event tracker",
+				JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
 		currentTab = NO_TAB_SELECTED;
 		for (JButton tabButton : tabButtons)
 		{
@@ -680,7 +691,8 @@ public class TerpinheimerPanel extends PluginPanel
 		body.add(postCollectionLog, gbc);
 
 		JButton postClanRoster = FluxUi.pillButton("POST clan roster to site");
-		postClanRoster.setToolTipText("Only the Jagex clan Owner sees this. POSTs the clan roster to your website (same as automatic sync in plugin settings).");
+		postClanRoster.setToolTipText(
+			"POSTs the clan roster to your website when your in-game rank title is allowed (configured on terpinheimercc.com).");
 		postClanRoster.addActionListener(e -> onUpdateRosterClicked());
 		postClanRoster.setVisible(false);
 		homePostClanRosterBtn = postClanRoster;
@@ -1117,12 +1129,19 @@ public class TerpinheimerPanel extends PluginPanel
 		ClanAttendanceTracker tracker = plugin.getClanAttendanceTracker();
 		attendanceReportArea.setText(tracker.getCurrentReport());
 		attendanceStartStopBtn.setText(tracker.isEventRunning() ? "Stop event" : "Start event");
+		boolean allowed = plugin.isLocalPlayerAllowedClanEventTrackerCached();
 		boolean block = config.attendanceBlockCopyWhileRunning() && tracker.isEventRunning();
-		attendancePostBtn.setEnabled(!block);
+		attendanceStartStopBtn.setEnabled(allowed);
+		attendancePostBtn.setEnabled(allowed && !block);
 	}
 
 	private void onAttendanceStartStop()
 	{
+		if (!plugin.isLocalPlayerAllowedClanEventTrackerCached())
+		{
+			showClanEventTrackerDeniedMessage();
+			return;
+		}
 		ClanAttendanceTracker tracker = plugin.getClanAttendanceTracker();
 		boolean stopping = tracker.isEventRunning();
 
@@ -1160,6 +1179,11 @@ public class TerpinheimerPanel extends PluginPanel
 
 	private void onAttendancePostToWebsite()
 	{
+		if (!plugin.isLocalPlayerAllowedClanEventTrackerCached())
+		{
+			showClanEventTrackerDeniedMessage();
+			return;
+		}
 		if (!plugin.isAttendanceSitePostReady())
 		{
 			JOptionPane.showMessageDialog(this,
@@ -1205,16 +1229,30 @@ public class TerpinheimerPanel extends PluginPanel
 		}
 		plugin.runOnClientThread(() ->
 		{
-			if (!plugin.isLocalPlayerJagexClanOwner())
+			if (!plugin.isLocalPlayerAllowedClanRosterPost())
 			{
+				String allowed = com.terpinheimer.clan.RankTitlePermissionList.formatForMessage(
+					plugin.getClanRosterPostRankTitlesForDisplay());
 				SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
-					"Only the Jagex clan Owner can POST the roster to the website.",
+					"Only these in-game rank titles may POST the roster (set on terpinheimercc.com): "
+						+ allowed,
 					"Update roster",
 					JOptionPane.INFORMATION_MESSAGE));
 				return;
 			}
 			plugin.requestClanRosterSiteSync();
 		});
+	}
+
+	private void showClanEventTrackerDeniedMessage()
+	{
+		String allowed = com.terpinheimer.clan.RankTitlePermissionList.formatForMessage(
+			plugin.getClanEventTrackerRankTitlesForDisplay());
+		JOptionPane.showMessageDialog(this,
+			"Clan Event tracker is limited to these in-game rank titles (set on terpinheimercc.com): "
+				+ allowed,
+			"Clan Event tracker",
+			JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private void updateWebEventsPanel()
@@ -1450,10 +1488,10 @@ public class TerpinheimerPanel extends PluginPanel
 		{
 			return;
 		}
-		boolean owner = plugin.isLocalPlayerJagexClanOwnerCached();
-		if (homePostClanRosterBtn.isVisible() != owner)
+		boolean mayPostRoster = plugin.isLocalPlayerAllowedClanRosterPostCached();
+		if (homePostClanRosterBtn.isVisible() != mayPostRoster)
 		{
-			homePostClanRosterBtn.setVisible(owner);
+			homePostClanRosterBtn.setVisible(mayPostRoster);
 			Container p = homePostClanRosterBtn.getParent();
 			if (p != null)
 			{

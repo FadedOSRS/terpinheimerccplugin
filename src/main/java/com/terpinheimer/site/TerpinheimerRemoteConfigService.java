@@ -4,7 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerLinks;
+import com.terpinheimer.clan.RankTitlePermissionList;
 import java.io.IOException;
+import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.client.RuneLiteProperties;
@@ -197,6 +199,39 @@ public class TerpinheimerRemoteConfigService
 		return 0;
 	}
 
+	/**
+	 * Rank titles allowed to POST the clan roster. From {@code permissions.clanRosterPostRankTitles}
+	 * on the website (comma-separated, e.g. {@code Deputy Owner,Ruby}). When omitted, {@link TerpinheimerLinks#CLAN_ROSTER_POST_RANK_TITLES_DEFAULT}.
+	 */
+	public List<String> getClanRosterPostRankTitles()
+	{
+		String raw = permissionsField("clanRosterPostRankTitles");
+		if (raw == null)
+		{
+			return RankTitlePermissionList.parse(TerpinheimerLinks.CLAN_ROSTER_POST_RANK_TITLES_DEFAULT);
+		}
+		List<String> parsed = RankTitlePermissionList.parse(raw);
+		if (parsed.isEmpty())
+		{
+			return RankTitlePermissionList.parse(TerpinheimerLinks.CLAN_ROSTER_POST_RANK_TITLES_DEFAULT);
+		}
+		return parsed;
+	}
+
+	/**
+	 * Rank titles allowed to use Clan Event tracker (start/stop/post). When omitted or empty on the
+	 * website, returns an empty list and the plugin treats that as no restriction.
+	 */
+	public List<String> getClanEventTrackerRankTitles()
+	{
+		String raw = permissionsField("clanEventTrackerRankTitles");
+		if (raw == null)
+		{
+			return RankTitlePermissionList.parse(TerpinheimerLinks.CLAN_EVENT_TRACKER_RANK_TITLES_DEFAULT);
+		}
+		return RankTitlePermissionList.parse(raw);
+	}
+
 	public String getWiseOldManCompetitionPageBase()
 	{
 		TerpinheimerRemoteConfigDto.WiseOldMan w = active.wiseOldMan;
@@ -265,6 +300,10 @@ public class TerpinheimerRemoteConfigService
 		{
 			dto.features = new TerpinheimerRemoteConfigDto.Features();
 		}
+		if (dto.permissions == null)
+		{
+			dto.permissions = new TerpinheimerRemoteConfigDto.Permissions();
+		}
 
 		setIfPresent(root, "discord", v -> dto.links.discord = v);
 		setIfPresent(root, "discordNameChanges", v -> dto.links.discordNameChanges = v);
@@ -284,6 +323,57 @@ public class TerpinheimerRemoteConfigService
 		if (root.has("clanRosterSyncEnabled") && !root.get("clanRosterSyncEnabled").isJsonNull())
 		{
 			dto.features.clanRosterSyncEnabled = root.get("clanRosterSyncEnabled").getAsBoolean();
+		}
+
+		setIfPresent(root, "clanRosterPostRankTitles", v -> dto.permissions.clanRosterPostRankTitles = v);
+		setIfPresent(root, "clanEventTrackerRankTitles", v -> dto.permissions.clanEventTrackerRankTitles = v);
+
+		if (root.has("permissions") && root.get("permissions").isJsonObject())
+		{
+			JsonObject perms = root.getAsJsonObject("permissions");
+			setIfPresent(perms, "clanRosterPostRankTitles", v -> dto.permissions.clanRosterPostRankTitles = v);
+			setIfPresent(perms, "clanEventTrackerRankTitles", v -> dto.permissions.clanEventTrackerRankTitles = v);
+			applyPermissionArray(perms, "clanRosterPostRankTitles", titles -> dto.permissions.clanRosterPostRankTitles = titles);
+			applyPermissionArray(perms, "clanEventTrackerRankTitles", titles -> dto.permissions.clanEventTrackerRankTitles = titles);
+		}
+
+		applyPermissionArray(root, "clanRosterPostRankTitles", titles -> dto.permissions.clanRosterPostRankTitles = titles);
+		applyPermissionArray(root, "clanEventTrackerRankTitles", titles -> dto.permissions.clanEventTrackerRankTitles = titles);
+	}
+
+	private String permissionsField(String key)
+	{
+		TerpinheimerRemoteConfigDto.Permissions p = active.permissions;
+		if (p == null)
+		{
+			return null;
+		}
+		switch (key)
+		{
+			case "clanRosterPostRankTitles":
+				return p.clanRosterPostRankTitles;
+			case "clanEventTrackerRankTitles":
+				return p.clanEventTrackerRankTitles;
+			default:
+				return null;
+		}
+	}
+
+	private static void applyPermissionArray(JsonObject root, String key, java.util.function.Consumer<String> setter)
+	{
+		if (!root.has(key) || root.get(key).isJsonNull())
+		{
+			return;
+		}
+		JsonElement el = root.get(key);
+		if (!el.isJsonArray())
+		{
+			return;
+		}
+		List<String> titles = RankTitlePermissionList.parseJsonElement(el);
+		if (!titles.isEmpty())
+		{
+			setter.accept(String.join(",", titles));
 		}
 	}
 

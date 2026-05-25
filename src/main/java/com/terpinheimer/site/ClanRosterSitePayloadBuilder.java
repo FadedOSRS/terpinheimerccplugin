@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.terpinheimer.TerpinheimerConfig;
+import com.terpinheimer.clan.ClanMemberRankDisplay;
 import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -140,18 +141,16 @@ public class ClanRosterSitePayloadBuilder
 		if (rank != null)
 		{
 			row.addProperty("rankLevel", rank.getRank());
-			ClanTitle title = settings.titleForRank(rank);
-			String rankDisplay;
-			if (title != null && title.getName() != null && !title.getName().isEmpty())
+			String rankDisplay = ClanMemberRankDisplay.forMember(settings, m);
+			if (rankDisplay != null)
 			{
-				rankDisplay = title.getName();
-				row.addProperty("rankTitle", rankDisplay);
+				ClanTitle title = settings.titleForRank(rank);
+				if (title != null && title.getName() != null && !title.getName().isEmpty())
+				{
+					row.addProperty("rankTitle", rankDisplay);
+				}
+				row.addProperty("rank", rankDisplay);
 			}
-			else
-			{
-				rankDisplay = readableJagexRankName(rank);
-			}
-			row.addProperty("rank", rankDisplay);
 		}
 
 		if (m.getJoinDate() != null)
@@ -160,36 +159,6 @@ public class ClanRosterSitePayloadBuilder
 		}
 
 		return row;
-	}
-
-	/**
-	 * When the clan has not set a custom title for this rank slot, use a readable name for built-in
-	 * {@link ClanRank} constants; otherwise a neutral slot label (not {@link ClanRank#toString()} which is
-	 * {@code Rank N}).
-	 */
-	private static String readableJagexRankName(ClanRank rank)
-	{
-		if (rank.equals(ClanRank.OWNER))
-		{
-			return "Owner";
-		}
-		if (rank.equals(ClanRank.DEPUTY_OWNER))
-		{
-			return "Deputy Owner";
-		}
-		if (rank.equals(ClanRank.ADMINISTRATOR))
-		{
-			return "Administrator";
-		}
-		if (rank.equals(ClanRank.GUEST))
-		{
-			return "Guest";
-		}
-		if (rank.equals(ClanRank.JMOD))
-		{
-			return "Jagex Moderator";
-		}
-		return "Clan rank slot " + rank.getRank();
 	}
 
 	private void addSyncTokenFields(JsonObject root)
