@@ -1,5 +1,6 @@
 package com.terpinheimer.wom;
 
+import com.terpinheimer.TerpinheimerLinks;
 import java.io.IOException;
 import java.util.Locale;
 import javax.inject.Inject;
@@ -19,7 +20,7 @@ import okhttp3.Response;
 public class WomPlayerUpdateService
 {
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-	private static final String API = "https://api.wiseoldman.net/v2";
+	private static final String API = TerpinheimerLinks.WOM_API_BASE;
 
 	private final OkHttpClient http;
 

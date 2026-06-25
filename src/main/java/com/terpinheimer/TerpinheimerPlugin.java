@@ -5,15 +5,6 @@ import com.terpinheimer.attendance.ClanAttendanceTracker;
 import com.terpinheimer.clan.ClanMemberRankDisplay;
 import com.terpinheimer.clan.RankTitlePermissionList;
 import com.terpinheimer.discord.ClanCofferDonationEventHandler;
-import com.terpinheimer.discord.ClueScrollEventHandler;
-import com.terpinheimer.discord.CollectionLogEventHandler;
-import com.terpinheimer.discord.CombatAchievementEventHandler;
-import com.terpinheimer.discord.DeathEventHandler;
-import com.terpinheimer.discord.DiscordLoginGrace;
-import com.terpinheimer.discord.LevelEventHandler;
-import com.terpinheimer.discord.LootEventHandler;
-import com.terpinheimer.discord.PetEventHandler;
-import com.terpinheimer.discord.QuestEventHandler;
 import com.terpinheimer.discord.WebhookDispatcher;
 import com.terpinheimer.map.LiveMapEventHandler;
 import com.terpinheimer.party.PartyLootTracker;
@@ -89,15 +80,10 @@ public class TerpinheimerPlugin extends Plugin
 	private static final int CLOG_XP_SYNC_RETRY_SECONDS = 10;
 	/** ~45 minutes between automatic roster snapshots while logged in (600 ticks/min at normal game rate). */
 	private static final int CLAN_ROSTER_PERIODIC_TICKS = 4_500;
-	/** When General → Wise Old Man group ID is 0, use this group (legacy profiles often still store 0). */
-	/** Wise Old Man profile sync on logout / world hop is always enabled. */
-	private static final boolean WOM_UPDATE_PROFILE_ON_LOGOUT = true;
-	/** When false, WOM sync runs every logout/world hop; when true, only after session XP progress. */
-	private static final boolean WOM_SYNC_ONLY_AFTER_PROGRESS = false;
-
-	private static final int DEFAULT_WOM_GROUP_ID = 23745;
 	/** Fixed Wise Old Man / calendar auto-refresh interval (not exposed in config). */
 	private static final int WOM_REFRESH_INTERVAL_MINUTES = 7;
+	/** Skip clog XP debounce briefly after login while skills sync. */
+	private static final int POST_LOGIN_GRACE_TICKS = 5;
 
 	@Inject
 	private Client client;
@@ -120,25 +106,7 @@ public class TerpinheimerPlugin extends Plugin
 	@Inject
 	private WebhookDispatcher webhookDispatcher;
 	@Inject
-	private LootEventHandler lootEventHandler;
-	@Inject
-	private ClueScrollEventHandler clueScrollEventHandler;
-	@Inject
-	private PetEventHandler petEventHandler;
-	@Inject
-	private DeathEventHandler deathEventHandler;
-	@Inject
-	private LevelEventHandler levelEventHandler;
-	@Inject
-	private CollectionLogEventHandler collectionLogEventHandler;
-	@Inject
-	private QuestEventHandler questEventHandler;
-	@Inject
-	private CombatAchievementEventHandler combatAchievementEventHandler;
-	@Inject
 	private ClanCofferDonationEventHandler clanCofferDonationEventHandler;
-	@Inject
-	private DiscordLoginGrace discordLoginGrace;
 	@Inject
 	private LiveMapEventHandler liveMapEventHandler;
 	@Inject
@@ -207,6 +175,7 @@ public class TerpinheimerPlugin extends Plugin
 	 * the website leaves the allow-list empty (no restriction).
 	 */
 	private volatile boolean clanEventTrackerAllowedCached;
+	private int ticksSinceLogin = -1;
 	/** Previous game state for roster snapshot reset (skip reset on world hop). */
 	private GameState rosterDiffPrevGameState = GameState.LOGIN_SCREEN;
 
@@ -480,15 +449,6 @@ public class TerpinheimerPlugin extends Plugin
 		warnIfDuplicateTerpinheimerLoaded();
 		eventBus.register(this);
 		webhookDispatcher.start();
-		eventBus.register(discordLoginGrace);
-		eventBus.register(lootEventHandler);
-		eventBus.register(clueScrollEventHandler);
-		eventBus.register(petEventHandler);
-		eventBus.register(deathEventHandler);
-		eventBus.register(levelEventHandler);
-		eventBus.register(collectionLogEventHandler);
-		eventBus.register(questEventHandler);
-		eventBus.register(combatAchievementEventHandler);
 		eventBus.register(clanCofferDonationEventHandler);
 		eventBus.register(liveMapEventHandler);
 		eventBus.register(clanAttendanceTracker);
@@ -537,16 +497,7 @@ public class TerpinheimerPlugin extends Plugin
 		partyLootTracker.setUiRefresh(null);
 		wsClient.unregisterMessage(PartyLootUpdate.class);
 		eventBus.unregister(liveMapEventHandler);
-		eventBus.unregister(combatAchievementEventHandler);
 		eventBus.unregister(clanCofferDonationEventHandler);
-		eventBus.unregister(questEventHandler);
-		eventBus.unregister(collectionLogEventHandler);
-		eventBus.unregister(levelEventHandler);
-		eventBus.unregister(deathEventHandler);
-		eventBus.unregister(petEventHandler);
-		eventBus.unregister(clueScrollEventHandler);
-		eventBus.unregister(lootEventHandler);
-		eventBus.unregister(discordLoginGrace);
 		webhookDispatcher.stop();
 		eventBus.unregister(this);
 		clientToolbar.removeNavigation(navButton);
@@ -660,6 +611,7 @@ public class TerpinheimerPlugin extends Plugin
 					sessionPlayerName = Text.removeTags(client.getLocalPlayer().getName());
 				}
 				sessionBaselineXp = client.getOverallExperience();
+				ticksSinceLogin = 0;
 				refreshRankPermissionCache();
 				if (remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured() && clanRosterPostAllowedCached)
 				{
@@ -677,6 +629,7 @@ public class TerpinheimerPlugin extends Plugin
 				onSessionEndExternalSync();
 				clanRosterPostAllowedCached = false;
 				clanEventTrackerAllowedCached = false;
+				ticksSinceLogin = -1;
 				break;
 			default:
 				break;
@@ -713,11 +666,16 @@ public class TerpinheimerPlugin extends Plugin
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			refreshRankPermissionCache();
+			if (ticksSinceLogin >= 0 && ticksSinceLogin < 10_000)
+			{
+				ticksSinceLogin++;
+			}
 		}
 		else
 		{
 			clanRosterPostAllowedCached = false;
 			clanEventTrackerAllowedCached = false;
+			ticksSinceLogin = -1;
 		}
 
 		if (!remoteConfigService.isClanRosterSyncEnabled() || !isClanRosterSyncConfigured()
@@ -745,7 +703,7 @@ public class TerpinheimerPlugin extends Plugin
 
 	private void onSessionEndExternalSync()
 	{
-		boolean womWant = WOM_UPDATE_PROFILE_ON_LOGOUT;
+		boolean womWant = remoteConfigService.isWomUpdateProfileOnLogout();
 		boolean clogWant = isAutomaticClogSiteSyncEnabled();
 		boolean rosterWant = remoteConfigService.isClanRosterSyncEnabled() && isClanRosterSyncConfigured()
 			&& clanRosterPostAllowedCached;
@@ -765,7 +723,7 @@ public class TerpinheimerPlugin extends Plugin
 		sessionBaselineXp = totalXp;
 
 		boolean womShould = womWant && nameForWom != null && !nameForWom.isEmpty()
-			&& (!WOM_SYNC_ONLY_AFTER_PROGRESS || hadProgress);
+			&& (!remoteConfigService.isWomSyncOnlyAfterProgress() || hadProgress);
 		boolean clogShould = clogWant && nameForWom != null && !nameForWom.isEmpty();
 
 		if (!womShould && !clogShould && !rosterWant)
@@ -847,7 +805,7 @@ public class TerpinheimerPlugin extends Plugin
 		{
 			return;
 		}
-		if (discordLoginGrace.inLoginGracePeriod())
+		if (ticksSinceLogin >= 0 && ticksSinceLogin < POST_LOGIN_GRACE_TICKS)
 		{
 			clogLastSkillXp.put(skill, xpNow);
 			return;
@@ -882,7 +840,7 @@ public class TerpinheimerPlugin extends Plugin
 
 	private boolean isAutomaticClogSiteSyncEnabled()
 	{
-		return false;
+		return remoteConfigService.isClogAutomaticSyncEnabled();
 	}
 
 	private boolean isClogSyncConfigured()
@@ -1185,13 +1143,7 @@ public class TerpinheimerPlugin extends Plugin
 
 	private int effectiveWomGroupId()
 	{
-		int remote = remoteConfigService.getWomGroupId();
-		if (remote > 0)
-		{
-			return remote;
-		}
-		int g = config.womGroupId();
-		return g > 0 ? g : DEFAULT_WOM_GROUP_ID;
+		return TerpinheimerLinks.WOM_GROUP_ID;
 	}
 
 	private void pullAll()
@@ -1202,7 +1154,7 @@ public class TerpinheimerPlugin extends Plugin
 		}
 		catch (IOException ignored)
 		{
-			// Use cached config or TerpinheimerLinks defaults.
+			// Use cached announcements/permissions or built-in defaults.
 		}
 		pullAnnouncements();
 		try

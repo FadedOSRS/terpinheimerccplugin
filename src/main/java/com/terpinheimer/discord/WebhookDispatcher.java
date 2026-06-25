@@ -1,9 +1,5 @@
 package com.terpinheimer.discord;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
-import com.terpinheimer.TerpinheimerConfig;
 import java.io.IOException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -12,7 +8,6 @@ import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import okhttp3.MediaType;
-import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -20,9 +15,8 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 /**
- * Single outbound queue for the one configured webhook: rate limiting and retries.
+ * Outbound queue for built-in Discord webhooks (e.g. clan coffer donations).
  */
 @Singleton
 public class WebhookDispatcher
@@ -30,31 +24,21 @@ public class WebhookDispatcher
 	private static final Logger log = LoggerFactory.getLogger(WebhookDispatcher.class);
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 	private static final long MIN_INTERVAL_MS = 2100L;
-	/** Must match multipart filename and {@code attachment://} in embed (Discord API). */
-	private static final String SCREENSHOT_FILENAME = "screenshot.png";
 
-	private final TerpinheimerConfig config;
 	private final OkHttpClient http;
-	private final Gson gson;
-	private final ScheduledExecutorService scheduledExecutor;
-	private final BlockingQueue<WebhookPayload> queue = new LinkedBlockingQueue<>(256);
+	private final ScheduledExecutorService scheduledExecutor;	private final BlockingQueue<WebhookPayload> queue = new LinkedBlockingQueue<>(256);
 	private volatile boolean running;
 	private volatile long lastSendEnd;
 	private long lastInvalidUrlWarnMs;
 
 	@Inject
 	WebhookDispatcher(
-		TerpinheimerConfig config,
 		OkHttpClient http,
-		Gson gson,
 		ScheduledExecutorService scheduledExecutor)
 	{
-		this.config = config;
 		this.http = http;
-		this.gson = gson;
 		this.scheduledExecutor = scheduledExecutor;
 	}
-
 	public void start()
 	{
 		running = true;
@@ -75,7 +59,7 @@ public class WebhookDispatcher
 			if (now - lastInvalidUrlWarnMs > 60_000L)
 			{
 				lastInvalidUrlWarnMs = now;
-				log.warn("Terpinheimer Discord: webhook URL is empty or invalid; notifications are disabled until it is set.");
+				log.warn("Terpinheimer Discord: webhook URL is empty or invalid; message dropped.");
 			}
 			return;
 		}
@@ -196,73 +180,14 @@ public class WebhookDispatcher
 	private String effectiveUrl(WebhookPayload payload)
 	{
 		String override = payload.getWebhookUrlOverride();
-		if (override != null && !override.trim().isEmpty())
-		{
-			return override.trim();
-		}
-		return config.webhookUrl();
+		return override != null ? override.trim() : "";
 	}
 
 	private Response executePost(String url, WebhookPayload job) throws IOException
 	{
-		byte[] png = job.getImagePng();
-		if (png != null && png.length > 0)
-		{
-			String payloadJson = jsonWithScreenshotInEmbed(gson, job.getJsonBody(), SCREENSHOT_FILENAME);
-			MultipartBody body = new MultipartBody.Builder()
-				.setType(MultipartBody.FORM)
-				.addFormDataPart("payload_json", payloadJson)
-				.addFormDataPart("files[0]", SCREENSHOT_FILENAME,
-					RequestBody.create(MediaType.parse("image/png"), png))
-				.build();
-			Request request = new Request.Builder().url(url).post(body).build();
-			return http.newCall(request).execute();
-		}
 		RequestBody body = RequestBody.create(JSON, job.getJsonBody());
 		Request request = new Request.Builder().url(url).post(body).build();
 		return http.newCall(request).execute();
-	}
-
-	/**
-	 * Discord requires {@code attachments} in {@code payload_json} for multipart uploads, and
-	 * {@code embed.image.url = attachment://filename} so the image shows inside the embed (not only
-	 * as a loose attachment).
-	 */
-	static String jsonWithScreenshotInEmbed(Gson gson, String jsonBody, String filename)
-	{
-		try
-		{
-			JsonObject root = gson.fromJson(jsonBody, JsonObject.class);
-			if (root == null)
-			{
-				return jsonBody;
-			}
-
-			JsonArray attachments = new JsonArray();
-			JsonObject att = new JsonObject();
-			att.addProperty("id", 0);
-			att.addProperty("filename", filename);
-			attachments.add(att);
-			root.add("attachments", attachments);
-
-			if (root.has("embeds"))
-			{
-				JsonArray embeds = root.getAsJsonArray("embeds");
-				if (embeds.size() > 0 && embeds.get(0).isJsonObject())
-				{
-					JsonObject embed = embeds.get(0).getAsJsonObject();
-					JsonObject image = new JsonObject();
-					image.addProperty("url", "attachment://" + filename);
-					embed.add("image", image);
-				}
-			}
-			return gson.toJson(root);
-		}
-		catch (Exception e)
-		{
-			log.warn("Terpinheimer Discord: could not attach screenshot to embed: {}", e.getMessage());
-			return jsonBody;
-		}
 	}
 
 	private static String readErrorBodySnippet(Response response)

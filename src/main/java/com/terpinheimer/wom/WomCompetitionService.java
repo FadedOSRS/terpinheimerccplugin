@@ -1,5 +1,6 @@
 package com.terpinheimer.wom;
 
+import com.terpinheimer.TerpinheimerLinks;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
@@ -23,7 +24,7 @@ import net.runelite.client.RuneLiteProperties;
 @Singleton
 public class WomCompetitionService
 {
-	private static final String API = "https://api.wiseoldman.net/v2";
+	private static final String API = TerpinheimerLinks.WOM_API_BASE;
 	private final OkHttpClient http;
 	private final Gson gson;
 
